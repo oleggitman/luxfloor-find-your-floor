@@ -1,0 +1,11 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+WhatsApp Chat/
+*.docx
+*.pdf
+alexey-tz-access-setup done.md
+alexey-tz-access-setup.md
+LuxFloor_WhatsApp_Analyse_DE*
