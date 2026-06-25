@@ -119,6 +119,7 @@ def create_lead(data: dict, env: dict) -> dict:
         "TITLE":          title,
         "NAME":           name,
         "ASSIGNED_BY_ID": ASSIGNED_BY_ID,
+        "OPENED":         "Y",   # visible to the whole team (Alexey can see + take over)
         "ADDRESS_CITY":   data.get("stadt", ""),
         "ADDRESS_POSTAL_CODE": data.get("plz", ""),
         "SOURCE_DESCRIPTION": "Website-Assistent",
