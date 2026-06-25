@@ -32,7 +32,10 @@ logger = logging.getLogger(__name__)
 
 ENV_PATH = Path(__file__).parent / ".env"
 
-ASSIGNED_BY_ID = "17"      # Alisa
+ASSIGNED_BY_ID = "17"      # Alisa (responsible). Co-notifying Alexey(13)/Ilya(1)
+                           # is done via a Bitrix automation rule in the UI (leads
+                           # have no observer field via API + webhook lacks im scope).
+                           # Exact routing logic: TBD with Ilya.
 QUELLE_WEBSITE = "49"      # Website-Assistent enum value
 LEAD_SCORE_HOT  = "45"
 LEAD_SCORE_WARM = "47"
@@ -61,20 +64,18 @@ def _is_hot(data: dict) -> bool:
 
 
 def _build_comments(data: dict) -> str:
-    lines = [
-        "== Find Your Floor Assistent ==",
-        f"Urgency: {data.get('urgency', '')}",
-        f"Action: {data.get('action', 'none')}",
-    ]
-    profile = data.get("profile") or {}
-    if profile:
-        lines.append(f"Optik: {profile.get('optik', '')}")
-        lines.append(f"Material: {profile.get('material', '')}")
-        constraints = profile.get("constraints", [])
-        if constraints:
-            lines.append(f"Constraints: {', '.join(constraints)}")
+    lines = ["== Find Your Floor Assistent =="]
+    summary = data.get("conversation_summary")
+    if summary:
+        lines.append(f"ZUSAMMENFASSUNG: {summary}")
+    flag = data.get("lead_flag", "normal")
+    if flag and flag != "normal":
+        lines.append(f"SONDERFALL: {flag.upper()} (Team muss aktiv zurueckrufen)")
+    lines.append(f"Dringlichkeit: {data.get('urgency', '')}")
+    if data.get("action") and data.get("action") != "none":
+        lines.append(f"Aktion: {data['action']}")
     if data.get("showroom_slot"):
-        lines.append(f"Showroom slot: {data['showroom_slot']}")
+        lines.append(f"Showroom-Termin: {data['showroom_slot']}")
     if data.get("strasse"):
         lines.append(f"Strasse: {data['strasse']}")
     return "\n".join(lines)
@@ -102,7 +103,13 @@ def create_lead(data: dict, env: dict) -> dict:
     profile_str = json.dumps(profile, ensure_ascii=False) if profile else ""
 
     name = data.get("name", "Unbekannt")
-    title = f"FYF: {name}"
+    flag = data.get("lead_flag", "normal")
+    prefix = ""
+    if flag == "auslandsversand":
+        prefix = "[AUSLAND] "
+    elif flag == "sonderanfrage":
+        prefix = "[SONDERFALL] "
+    title = f"{prefix}FYF: {name}"
     if area:
         title += f", {area}m2"
     if skus:

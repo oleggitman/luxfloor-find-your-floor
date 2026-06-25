@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Optional
 
 import anthropic
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -149,6 +149,8 @@ TOOLS = [
                 },
                 "urgency":    {"type": "string", "enum": ["needed_now", "has_time", "needs_storage"]},
                 "info_note":  {"type": "string"},
+                "conversation_summary": {"type": "string", "description": "VERY brief summary for the sales team: what the customer wants, key concerns, budget signal. Max 2-3 short sentences. German."},
+                "lead_flag":  {"type": "string", "enum": ["normal", "auslandsversand", "sonderanfrage"], "description": "Mark 'auslandsversand' for abroad delivery, 'sonderanfrage' for any special request the assistant cannot resolve. Default 'normal'."},
                 "action":     {"type": "string", "enum": ["none", "sample_request", "showroom_booking"]},
                 "showroom_slot": {"type": "string"},
                 "dsgvo_consent": {"type": "boolean"},
@@ -200,6 +202,37 @@ class ChatResponse(BaseModel):
     session_id: str
 
 
+# --- abuse / cost protection (in-memory) ---
+PER_IP_HOURLY_LIMIT = 40
+GLOBAL_DAILY_LIMIT = 600
+_ip_hits: dict[str, list] = {}
+_daily = {"day": None, "count": 0}
+
+RATE_LIMIT_MSG = (
+    "Wir haben heute schon sehr viele Anfragen. Bitte kontaktieren Sie uns "
+    "direkt: Telefon 02131 2917676, WhatsApp +49 179 403 33 81 oder "
+    "info@lux-floor.de. Wir helfen Ihnen gerne weiter."
+)
+
+
+def _rate_limited(ip: str) -> bool:
+    now = time.time()
+    today = time.strftime("%Y-%m-%d", time.gmtime(now))
+    if _daily["day"] != today:
+        _daily["day"] = today
+        _daily["count"] = 0
+    if _daily["count"] >= GLOBAL_DAILY_LIMIT:
+        return True
+    hits = [t for t in _ip_hits.get(ip, []) if now - t < 3600]
+    if len(hits) >= PER_IP_HOURLY_LIMIT:
+        _ip_hits[ip] = hits
+        return True
+    hits.append(now)
+    _ip_hits[ip] = hits
+    _daily["count"] += 1
+    return False
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -212,7 +245,13 @@ def serve_widget():
 
 
 @app.post("/chat", response_model=ChatResponse)
-def chat(req: ChatRequest):
+def chat(req: ChatRequest, request: Request):
+    fwd = request.headers.get("x-forwarded-for", "")
+    ip = fwd.split(",")[0].strip() if fwd else (request.client.host if request.client else "unknown")
+    if _rate_limited(ip):
+        sid = req.session_id or str(uuid.uuid4())
+        return ChatResponse(reply=RATE_LIMIT_MSG, session_id=sid)
+
     _prune_sessions()
 
     sid = req.session_id or str(uuid.uuid4())
