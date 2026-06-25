@@ -12,10 +12,10 @@
 
   /* ---- styles ---- */
   var css = [
-    '#fyf-btn{position:fixed;bottom:120px;right:16px;width:56px;height:56px;',
-    'border-radius:50%;background:#A88E77;border:none;cursor:pointer;',
-    'box-shadow:0 4px 14px rgba(0,0,0,.25);z-index:2147483647;display:flex;',
-    'align-items:center;justify-content:center;}',
+    '#fyf-btn{position:fixed!important;bottom:160px!important;right:16px!important;width:56px!important;height:56px!important;',
+    'border-radius:50%!important;background:#A88E77!important;border:none!important;cursor:pointer!important;',
+    'box-shadow:0 4px 14px rgba(0,0,0,.25)!important;z-index:2147483647!important;display:flex!important;',
+    'align-items:center!important;justify-content:center!important;}',
     '#fyf-btn svg{pointer-events:none;}',
     '#fyf-panel{position:fixed;bottom:190px;right:16px;width:320px;',
     'max-height:520px;display:none;flex-direction:column;',
@@ -99,16 +99,20 @@
     return el;
   }
 
+  panel.style.cssText = 'position:fixed!important;display:none!important;bottom:190px!important;right:16px!important;width:320px!important;max-height:520px!important;flex-direction:column!important;background:#fff!important;border-radius:12px!important;box-shadow:0 8px 32px rgba(0,0,0,.18)!important;z-index:2147483646!important;overflow:hidden!important;font-family:system-ui,sans-serif!important;';
+
   var opened = false;
   function open() {
-    panel.classList.add('open');
+    panel.style.setProperty('display', 'flex', 'important');
     opened = true;
     if (!msgs.children.length) {
       addMsg('Herzlich willkommen! Ich bin Ihr Bodenberater bei Lux-Floor. Wie kann ich Ihnen helfen?', 'bot');
     }
     input.focus();
   }
-  function close() { panel.classList.remove('open'); }
+  function close() {
+    panel.style.setProperty('display', 'none', 'important');
+  }
 
   btn.addEventListener('click', function () { opened ? close() : open(); opened = !opened; });
   closeBtn.addEventListener('click', function () { close(); opened = false; });
