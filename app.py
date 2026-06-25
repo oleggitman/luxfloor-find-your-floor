@@ -184,7 +184,7 @@ app = FastAPI(title="Find Your Floor Assistant")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://lux-floor.de", "https://www.lux-floor.de"],
+    allow_origins=["*"],
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type"],
 )
