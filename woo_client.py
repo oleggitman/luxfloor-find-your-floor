@@ -127,7 +127,7 @@ def max_nutzungsklasse(product: dict) -> int | None:
 class WooClient:
     def __init__(self, env: dict | None = None):
         env = env or load_env()
-        self.base = env["WOO_BASE_URL"].rstrip("/")
+        self.base = env.get("WOO_BASE_URL", "https://lux-floor.de").rstrip("/")
         self.auth = (env["WOO_CONSUMER_KEY"], env["WOO_CONSUMER_SECRET"])
         self.session = requests.Session()
 
