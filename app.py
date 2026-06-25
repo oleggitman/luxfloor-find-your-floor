@@ -212,6 +212,8 @@ def debug_woo():
         key = ENV.get("WOO_CONSUMER_KEY", "")
         secret = ENV.get("WOO_CONSUMER_SECRET", "")
         base = ENV.get("WOO_BASE_URL", "https://lux-floor.de")
+        if not base.startswith(("http://", "https://")):
+            base = "https://" + base
         url = f"{base}/wp-json/wc/v3/products"
         r = req.get(url, auth=(key, secret), params={"per_page": 1}, timeout=10)
         return {
