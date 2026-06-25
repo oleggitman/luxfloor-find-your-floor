@@ -205,28 +205,6 @@ def health():
     return {"status": "ok"}
 
 
-@app.get("/debug/woo")
-def debug_woo():
-    import requests as req
-    try:
-        key = ENV.get("WOO_CONSUMER_KEY", "")
-        secret = ENV.get("WOO_CONSUMER_SECRET", "")
-        base = ENV.get("WOO_BASE_URL", "https://lux-floor.de")
-        if not base.startswith(("http://", "https://")):
-            base = "https://" + base
-        url = f"{base}/wp-json/wc/v3/products"
-        r = req.get(url, auth=(key, secret), params={"per_page": 1}, timeout=10)
-        return {
-            "status": r.status_code,
-            "key_prefix": key[:12] + "..." if key else "MISSING",
-            "secret_prefix": secret[:12] + "..." if secret else "MISSING",
-            "base": base,
-            "response": r.text[:200],
-        }
-    except Exception as e:
-        return {"error": str(e)}
-
-
 @app.get("/widget.js")
 def serve_widget():
     path = HERE / "widget.js"
