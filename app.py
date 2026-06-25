@@ -28,7 +28,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from bitrix_client import create_lead, load_env
+from bitrix_client import create_lead
 from woo_client import WooClient, dispatch as woo_dispatch
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -36,7 +36,22 @@ logger = logging.getLogger(__name__)
 
 HERE = Path(__file__).parent
 
-ENV = load_env(HERE / ".env")
+
+def _load_env() -> dict:
+    """Load from .env file if present (local dev), then overlay os.environ."""
+    out = {}
+    env_file = HERE / ".env"
+    if env_file.exists():
+        for line in env_file.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                out[k.strip()] = v.strip()
+    out.update(os.environ)
+    return out
+
+
+ENV = _load_env()
 SYSTEM_PROMPT  = (HERE / "system-prompt.md").read_text()
 KNOWLEDGE_BASE = (HERE / "knowledge-base.md").read_text()
 MODEL = ENV.get("ASSISTANT_MODEL", "claude-sonnet-4-6")
