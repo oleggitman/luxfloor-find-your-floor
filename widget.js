@@ -10,6 +10,7 @@
 
   var SESSION_KEY = 'fyf_session_id';
   var sessionId = null;
+  var OPENING_CHIPS = ['Vinyl', 'Laminat', 'Parkett', 'Ich bin mir nicht sicher, beraten Sie mich', 'Andere Frage'];
   try { sessionId = localStorage.getItem(SESSION_KEY); } catch (e) {}
 
   /* ---- styles ---- */
@@ -45,6 +46,14 @@
     '.fyf-msg.bot{background:#f5f2ee;color:#2b2b2b;align-self:flex-start;}',
     '.fyf-msg.user{background:#A88E77;color:#fff;align-self:flex-end;}',
     '.fyf-typing{font-size:22px;letter-spacing:2px;color:#999;}',
+    '.fyf-msg .fyf-img{max-width:100%;border-radius:8px;margin-top:6px;display:block;}',
+    '.fyf-msg .fyf-hr{border:none;border-top:1px solid #e3ddd5;margin:8px 0;}',
+    '.fyf-msg a{color:#8a6f57;}',
+    '#fyf-chips{display:none;flex-wrap:wrap;gap:6px;padding:0 12px 8px;}',
+    '.fyf-chip{background:#fff;color:#A88E77;border:1px solid #A88E77;',
+    'border-radius:16px;padding:6px 12px;font-size:13px;line-height:1.3;',
+    'cursor:pointer;font-family:inherit;}',
+    '.fyf-chip:hover{background:#A88E77;color:#fff;}',
     '#fyf-foot{border-top:1px solid #eee;padding:8px;',
     'display:flex;gap:6px;}',
     '#fyf-input{flex:1;border:1px solid #ddd;border-radius:8px;',
@@ -85,6 +94,7 @@
     '  <button id="fyf-close" aria-label="Schliessen">&times;</button>',
     '</div>',
     '<div id="fyf-msgs"></div>',
+    '<div id="fyf-chips"></div>',
     '<div id="fyf-foot">',
     '  <textarea id="fyf-input" rows="1"',
     '   placeholder="Ihre Frage..."></textarea>',
@@ -98,27 +108,80 @@
 
   var bubbleX = bubble.querySelector('#fyf-bubble-x');
   var msgs   = panel.querySelector('#fyf-msgs');
+  var chips  = panel.querySelector('#fyf-chips');
   var input  = panel.querySelector('#fyf-input');
   var sendBtn = panel.querySelector('#fyf-send');
   var closeBtn = panel.querySelector('#fyf-close');
 
   /* ---- helpers ---- */
-  function linkify(text) {
-    return text
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>')
-      .replace(/\n/g, '<br>');
+  function escapeHtml(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  // Render the small Markdown subset the assistant emits, XSS-safe: escape
+  // everything first, then build only our own tags. Links/images are stashed as
+  // tokens so the bare-URL autolinker can't touch or double-wrap them. Only
+  // https?:// is ever allowed in href/src, so javascript: urls are impossible.
+  function renderMarkdown(text) {
+    var tokens = [];
+    function stash(html) { tokens.push(html); return '@@FYFTOK' + (tokens.length - 1) + '@@'; }
+
+    var s = escapeHtml(String(text));
+
+    // ![alt](url) -> image thumbnail
+    s = s.replace(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g, function (m, alt, url) {
+      return stash('<img class="fyf-img" src="' + url + '" alt="' + alt + '" loading="lazy">');
+    });
+    // [text](url) -> link
+    s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, function (m, label, url) {
+      return stash('<a href="' + url + '" target="_blank" rel="noopener">' + label + '</a>');
+    });
+    // bare URLs -> link, trimming trailing punctuation so we don't swallow ) . , ] etc.
+    s = s.replace(/https?:\/\/[^\s<]+/g, function (m) {
+      var trail = (m.match(/[).,!?;:\]]+$/) || [''])[0];
+      if (trail) m = m.slice(0, m.length - trail.length);
+      return stash('<a href="' + m + '" target="_blank" rel="noopener">' + m + '</a>') + trail;
+    });
+    // **bold** then *italic*
+    s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    s = s.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>');
+    // --- horizontal rule on its own line
+    s = s.replace(/^[ \t]*-{3,}[ \t]*$/gm, function () { return stash('<hr class="fyf-hr">'); });
+    // "- " / "* " bullets
+    s = s.replace(/^[ \t]*[-*][ \t]+/gm, '• ');
+    // line breaks
+    s = s.replace(/\n/g, '<br>');
+    // restore stashed tags
+    return s.replace(/@@FYFTOK(\d+)@@/g, function (m, i) { return tokens[Number(i)]; });
   }
 
   function addMsg(text, role) {
     var el = document.createElement('div');
     el.className = 'fyf-msg ' + role;
-    el.innerHTML = linkify(text);
+    el.innerHTML = renderMarkdown(text);
     msgs.appendChild(el);
     msgs.scrollTop = msgs.scrollHeight;
     return el;
+  }
+
+  /* ---- quick-reply chips ---- */
+  function clearChips() {
+    chips.innerHTML = '';
+    chips.style.setProperty('display', 'none', 'important');
+  }
+
+  function renderChips(options) {
+    chips.innerHTML = '';
+    if (!options || !options.length) { clearChips(); return; }
+    options.forEach(function (opt) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'fyf-chip';
+      b.textContent = opt;
+      b.addEventListener('click', function () { send(opt); });
+      chips.appendChild(b);
+    });
+    chips.style.setProperty('display', 'flex', 'important');
   }
 
   panel.style.cssText = 'position:fixed!important;display:none!important;bottom:220px!important;right:20px!important;width:320px!important;max-height:520px!important;flex-direction:column!important;background:#fff!important;border-radius:12px!important;box-shadow:0 8px 32px rgba(0,0,0,.18)!important;z-index:2147483646!important;overflow:hidden!important;font-family:system-ui,sans-serif!important;';
@@ -135,6 +198,7 @@
     opened = true;
     if (!msgs.children.length) {
       addMsg('Herzlich willkommen! Ich bin Ihr Bodenberater bei Lux-Floor. Wie kann ich Ihnen helfen?', 'bot');
+      renderChips(OPENING_CHIPS);
     }
     input.focus();
   }
@@ -162,12 +226,14 @@
   /* ---- send ---- */
   var busy = false;
 
-  function send() {
+  // forced = a chip value (string). A click event (non-string) means "use the input box".
+  function send(forced) {
     if (busy) return;
-    var text = input.value.trim();
+    var fromChip = (typeof forced === 'string');
+    var text = (fromChip ? forced : input.value).trim();
     if (!text) return;
-    input.value = '';
-    input.style.height = 'auto';
+    if (!fromChip) { input.value = ''; input.style.height = 'auto'; }
+    clearChips();
     addMsg(text, 'user');
 
     busy = true;
@@ -193,6 +259,7 @@
         sessionId = data.session_id;
         try { localStorage.setItem(SESSION_KEY, sessionId); } catch (e) {}
         addMsg(data.reply || '(keine Antwort)', 'bot');
+        renderChips(data.options);
       })
       .catch(function () {
         clearTimeout(slowTimer);

@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from pathlib import Path
@@ -200,6 +201,27 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     reply: str
     session_id: str
+    options: list[str] = []
+
+
+# Quick-reply chips: the model may append one [[CHIPS: a | b | c]] marker to its
+# reply. We strip it from the visible text and return the options to the widget,
+# which renders them as tappable buttons. No marker -> no chips (graceful).
+CHIPS_RE = re.compile(r"\[\[\s*CHIPS\s*:\s*(.*?)\]\]", re.IGNORECASE | re.DOTALL)
+
+
+def _extract_chips(reply: str) -> tuple[str, list[str]]:
+    m = CHIPS_RE.search(reply)
+    if not m:
+        return reply.strip(), []
+    seen, options = set(), []
+    for opt in m.group(1).split("|"):
+        opt = opt.strip()
+        if opt and opt not in seen:
+            seen.add(opt)
+            options.append(opt)
+    clean = CHIPS_RE.sub("", reply).strip()
+    return clean, options[:6]
 
 
 # --- abuse / cost protection (in-memory) ---
@@ -266,7 +288,8 @@ def chat(req: ChatRequest, request: Request):
     reply = _run_turn(messages)
     session["last_active"] = time.time()
 
-    return ChatResponse(reply=reply, session_id=sid)
+    reply, options = _extract_chips(reply)
+    return ChatResponse(reply=reply, session_id=sid, options=options)
 
 
 def _run_turn(messages: list) -> str:
