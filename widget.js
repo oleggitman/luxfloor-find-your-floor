@@ -10,7 +10,7 @@
 
   var SESSION_KEY = 'fyf_session_id';
   var sessionId = null;
-  var OPENING_CHIPS = ['Vinyl', 'Laminat', 'Parkett', 'Ich bin mir nicht sicher, beraten Sie mich', 'Andere Frage'];
+  var OPENING_CHIPS = ['Beraten Sie mich', 'Ich suche einen Boden', 'Ich habe eine Frage'];
   try { sessionId = localStorage.getItem(SESSION_KEY); } catch (e) {}
 
   /* ---- styles ---- */
