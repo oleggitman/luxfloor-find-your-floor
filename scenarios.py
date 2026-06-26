@@ -157,6 +157,21 @@ SCENARIOS = {
         ],
         "check": lambda tr, fn: _faq_out_of_kb(tr, fn),
     },
+    "door_beraten": {
+        "desc": "Opening door 'Beraten Sie mich' -> guided, asks a question, no blind search",
+        "turns": ["Beraten Sie mich"],
+        "check": lambda tr, fn: _door_guided(tr, fn),
+    },
+    "door_suche": {
+        "desc": "Opening door 'Ich suche einen Boden' -> asks direction, no blind search",
+        "turns": ["Ich suche einen Boden"],
+        "check": lambda tr, fn: _door_guided(tr, fn),
+    },
+    "door_frage": {
+        "desc": "Opening door 'Ich habe eine Frage' -> serve-first, no search, no forced contact",
+        "turns": ["Ich habe eine Frage"],
+        "check": lambda tr, fn: _door_frage(tr, fn),
+    },
 }
 
 
@@ -275,6 +290,24 @@ def _faq_out_of_kb(tr, fn):
     return True, "no invented discount, routed to human"
 
 
+def _door_guided(tr, fn):
+    # doors 1 and 2: must not blind-search on the opening tap, must ask something
+    if calls(tr, "search_products"):
+        return False, "searched products with no profile yet"
+    if "?" not in " ".join(fn):
+        return False, "did not ask a qualifying question"
+    return True, "asked a question, no blind search"
+
+
+def _door_frage(tr, fn):
+    # door 3: serve-first, no product search, must not demand contact to start
+    if calls(tr, "search_products"):
+        return False, "ran a product search for a general-question opener"
+    if asks_for_contact(fn):
+        return False, "demanded contact just to take a question"
+    return True, "stayed in serve mode, invited the question"
+
+
 def main():
     env = load_env()
     model = env.get("ASSISTANT_MODEL", "claude-sonnet-4-6")
@@ -292,7 +325,7 @@ def main():
             sys.exit(2)
 
     print("=" * 64)
-    print(f"FIND YOUR FLOOR — CONVERSATIONAL SCENARIOS · model={model}")
+    print(f"FIND YOUR FLOOR, CONVERSATIONAL SCENARIOS · model={model}")
     print("=" * 64)
     passed = failed = 0
     for name in names:

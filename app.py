@@ -1,4 +1,4 @@
-"""Find Your Floor — production FastAPI backend.
+"""Find Your Floor, production FastAPI backend.
 
 Endpoints:
   POST /chat    {session_id?, message} -> {reply, session_id}
@@ -14,12 +14,14 @@ Tools wired:
 """
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import os
 import re
 import time
 import uuid
+from collections import deque
 from pathlib import Path
 from typing import Optional
 
@@ -56,6 +58,34 @@ ENV = _load_env()
 SYSTEM_PROMPT  = (HERE / "system-prompt.md").read_text()
 KNOWLEDGE_BASE = (HERE / "knowledge-base.md").read_text()
 MODEL = ENV.get("ASSISTANT_MODEL", "claude-sonnet-4-6")
+
+# --- conversation logging (observability) ---
+# One JSON line per turn to LOG_PATH + an in-memory ring buffer for /admin.
+# LOG_PATH is ephemeral on Render unless a persistent disk is mounted there.
+# Safe with the current single-worker uvicorn (render.yaml has no --workers);
+# the buffer is per-process if workers are ever added.
+LOG_PATH = ENV.get("LOG_PATH", str(HERE / "conversations.jsonl"))
+ADMIN_TOKEN = ENV.get("ADMIN_TOKEN", "")
+CONV_LOG: deque = deque(maxlen=200)
+
+
+def _log_turn(session_id: str, user: str, assistant: str, options: list, meta: dict) -> None:
+    """Append one turn to the ring buffer and JSONL. Never breaks a reply."""
+    rec = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "session_id": session_id,
+        "user": user,
+        "assistant": assistant,
+        "options": options,
+        "tools": meta.get("tools", []),
+        "lead": meta.get("lead"),
+    }
+    CONV_LOG.append(rec)
+    try:
+        with open(LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except OSError as e:
+        logger.warning("conv log write failed: %s", e)
 
 SYSTEM = [
     {"type": "text", "text": SYSTEM_PROMPT},
@@ -260,6 +290,26 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/version")
+def version():
+    return {"commit": ENV.get("RENDER_GIT_COMMIT", "unknown"),
+            "branch": ENV.get("RENDER_GIT_BRANCH", "unknown")}
+
+
+@app.get("/admin/conversations")
+def admin_conversations(token: str = "", limit: int = 50):
+    """Recent conversations for quality review. Token-gated; PII inside, keep private."""
+    if not ADMIN_TOKEN:
+        raise HTTPException(status_code=503, detail="ADMIN_TOKEN not configured")
+    if not hmac.compare_digest(token, ADMIN_TOKEN):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    turns = list(CONV_LOG)[-max(1, min(limit, 200)):]
+    convos: dict = {}
+    for t in turns:
+        convos.setdefault(t["session_id"], []).append(t)
+    return {"count": len(turns), "sessions": convos}
+
+
 @app.get("/widget.js")
 def serve_widget():
     path = HERE / "widget.js"
@@ -285,14 +335,17 @@ def chat(req: ChatRequest, request: Request):
     messages = session["messages"]
     messages.append({"role": "user", "content": req.message})
 
-    reply = _run_turn(messages)
+    reply_raw, meta = _run_turn(messages)
     session["last_active"] = time.time()
 
-    reply, options = _extract_chips(reply)
+    reply, options = _extract_chips(reply_raw)
+    _log_turn(sid, req.message, reply, options, meta)
     return ChatResponse(reply=reply, session_id=sid, options=options)
 
 
-def _run_turn(messages: list) -> str:
+def _run_turn(messages: list) -> tuple[str, dict]:
+    used_tools: list = []
+    lead = None
     while True:
         resp = ai.messages.create(
             model=MODEL,
@@ -304,16 +357,19 @@ def _run_turn(messages: list) -> str:
         messages.append({"role": "assistant", "content": resp.content})
 
         if resp.stop_reason != "tool_use":
-            return "".join(b.text for b in resp.content if b.type == "text")
+            text = "".join(b.text for b in resp.content if b.type == "text")
+            return text, {"tools": used_tools, "lead": lead}
 
         tool_results = []
         for block in resp.content:
             if block.type != "tool_use":
                 continue
+            used_tools.append(block.name)
             logger.info("tool=%s args=%s", block.name, list(block.input.keys()))
             try:
                 result = _dispatch_tool(block.name, block.input)
                 if block.name == "create_lead":
+                    lead = {"id": result.get("lead_id"), "hot": result.get("hot")}
                     logger.info("lead created id=%s hot=%s",
                                 result.get("lead_id"), result.get("hot"))
             except Exception as e:
