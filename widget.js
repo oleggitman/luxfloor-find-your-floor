@@ -5,6 +5,8 @@
     document.querySelector('script[data-backend]');
   var BACKEND = (script && script.getAttribute('data-backend')) || '';
   if (!BACKEND) { console.warn('FYF: data-backend missing'); return; }
+  // normalize: collapse an accidental double scheme (https://https://...) and strip trailing slashes
+  BACKEND = BACKEND.replace(/^(https?:\/\/)+/i, 'https://').replace(/\/+$/, '');
 
   var SESSION_KEY = 'fyf_session_id';
   var sessionId = null;
