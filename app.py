@@ -87,6 +87,25 @@ def _log_turn(session_id: str, user: str, assistant: str, options: list, meta: d
     except OSError as e:
         logger.warning("conv log write failed: %s", e)
 
+
+def _read_recent(limit: int) -> list:
+    """Read the last `limit` turns from the durable JSONL (survives restarts on a
+    persistent disk). Falls back to the in-memory buffer if the file is missing."""
+    try:
+        with open(LOG_PATH, "r", encoding="utf-8") as f:
+            lines = f.readlines()[-limit:]
+        out = []
+        for ln in lines:
+            ln = ln.strip()
+            if ln:
+                try:
+                    out.append(json.loads(ln))
+                except json.JSONDecodeError:
+                    pass
+        return out
+    except OSError:
+        return list(CONV_LOG)[-limit:]
+
 SYSTEM = [
     {"type": "text", "text": SYSTEM_PROMPT},
     {"type": "text", "text": "# KNOWLEDGE BASE\n\n" + KNOWLEDGE_BASE,
@@ -303,10 +322,10 @@ def admin_conversations(token: str = "", limit: int = 50):
         raise HTTPException(status_code=503, detail="ADMIN_TOKEN not configured")
     if not hmac.compare_digest(token, ADMIN_TOKEN):
         raise HTTPException(status_code=401, detail="unauthorized")
-    turns = list(CONV_LOG)[-max(1, min(limit, 200)):]
+    turns = _read_recent(max(1, min(limit, 500)))
     convos: dict = {}
     for t in turns:
-        convos.setdefault(t["session_id"], []).append(t)
+        convos.setdefault(t.get("session_id"), []).append(t)
     return {"count": len(turns), "sessions": convos}
 
 
