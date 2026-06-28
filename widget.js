@@ -13,6 +13,11 @@
   var OPENING_CHIPS = ['Beraten Sie mich', 'Ich suche einen Boden', 'Ich habe eine Frage'];
   try { sessionId = localStorage.getItem(SESSION_KEY); } catch (e) {}
 
+  // Nudge re-shows once per visit (sessionStorage). Drop the old once-forever
+  // localStorage flag so returning visitors (and we) are not permanently muted.
+  var NUDGE_KEY = 'fyf_nudge_dismissed';
+  try { localStorage.removeItem('fyf_bubble_seen'); } catch (e) {}
+
   /* ---- styles ---- */
   var css = [
     '#fyf-btn{position:fixed!important;bottom:150px!important;right:20px!important;width:56px!important;height:56px!important;',
@@ -20,10 +25,24 @@
     'box-shadow:0 4px 14px rgba(0,0,0,.25)!important;z-index:2147483647!important;display:flex!important;',
     'align-items:center!important;justify-content:center!important;padding:0!important;margin:0!important;}',
     '#fyf-btn svg{pointer-events:none;}',
-    '#fyf-bubble{position:fixed!important;bottom:160px!important;right:84px!important;max-width:210px!important;',
-    'background:#fff!important;color:#333!important;padding:10px 12px!important;border-radius:12px!important;',
-    'box-shadow:0 4px 16px rgba(0,0,0,.18)!important;z-index:2147483646!important;font-size:13px!important;',
-    'line-height:1.4!important;font-family:system-ui,sans-serif!important;cursor:pointer!important;display:none!important;}',
+    '#fyf-bubble{position:fixed!important;bottom:216px!important;right:20px!important;max-width:240px!important;',
+    'background:#fff!important;color:#333!important;padding:11px 13px!important;border-radius:12px!important;',
+    'box-shadow:0 6px 20px rgba(0,0,0,.18)!important;z-index:2147483646!important;font-size:13px!important;',
+    'line-height:1.45!important;font-family:system-ui,sans-serif!important;cursor:pointer!important;display:none!important;',
+    'animation:fyf-bubble-in .35s ease-out!important;}',
+    '#fyf-bubble::after{content:""!important;position:absolute!important;bottom:-7px!important;right:22px!important;',
+    'width:0!important;height:0!important;border-left:7px solid transparent!important;',
+    'border-right:7px solid transparent!important;border-top:7px solid #fff!important;}',
+    '@keyframes fyf-bubble-in{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}',
+    '#fyf-label{position:fixed!important;bottom:162px!important;right:84px!important;background:#A88E77!important;',
+    'color:#fff!important;padding:9px 13px!important;border-radius:20px!important;font-size:13px!important;',
+    'line-height:1!important;font-weight:600!important;font-family:system-ui,sans-serif!important;',
+    'box-shadow:0 4px 14px rgba(0,0,0,.22)!important;cursor:pointer!important;z-index:2147483646!important;',
+    'white-space:nowrap!important;display:flex!important;align-items:center!important;gap:6px!important;}',
+    '@keyframes fyf-pulse{0%{box-shadow:0 4px 14px rgba(0,0,0,.25),0 0 0 0 rgba(168,142,119,.55);}',
+    '70%{box-shadow:0 4px 14px rgba(0,0,0,.25),0 0 0 14px rgba(168,142,119,0);}',
+    '100%{box-shadow:0 4px 14px rgba(0,0,0,.25),0 0 0 0 rgba(168,142,119,0);}}',
+    '#fyf-btn.fyf-pulse{animation:fyf-pulse 2.2s ease-out infinite!important;}',
     '#fyf-bubble-x{position:absolute!important;top:-8px!important;right:-8px!important;width:20px!important;height:20px!important;',
     'background:#A88E77!important;color:#fff!important;border-radius:50%!important;border:none!important;',
     'font-size:13px!important;line-height:1!important;cursor:pointer!important;display:flex!important;',
@@ -64,7 +83,9 @@
     '#fyf-panel{width:100vw;right:0;bottom:0;border-radius:12px 12px 0 0;',
     'max-height:80vh;}',
     '#fyf-btn{bottom:150px!important;right:16px!important;}',
-    '#fyf-bubble{bottom:160px!important;right:80px!important;max-width:170px!important;}}',
+    '#fyf-label{bottom:162px!important;right:80px!important;}',
+    '#fyf-bubble{bottom:216px!important;right:16px!important;max-width:78vw!important;}}',
+    '@media(max-width:400px){#fyf-label{display:none!important;}}',
   ].join('');
 
   var style = document.createElement('style');
@@ -74,14 +95,22 @@
   /* ---- DOM ---- */
   var btn = document.createElement('button');
   btn.id = 'fyf-btn';
+  btn.className = 'fyf-pulse';
   btn.setAttribute('aria-label', 'Bodenberater starten');
   btn.innerHTML = '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>';
+
+  // Always-visible label so the icon is never a mystery (resting state).
+  var label = document.createElement('div');
+  label.id = 'fyf-label';
+  label.setAttribute('lang', 'de');
+  label.setAttribute('translate', 'no');
+  label.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>Bodenberater';
 
   var bubble = document.createElement('div');
   bubble.id = 'fyf-bubble';
   bubble.setAttribute('lang', 'de');
   bubble.setAttribute('translate', 'no');
-  bubble.innerHTML = 'Haben Sie Fragen zu Ihrem Boden? Ich berate Sie gern.' +
+  bubble.innerHTML = 'Ich helfe Ihnen, den passenden Boden zu finden, und beantworte alle Ihre Fragen.' +
     '<button id="fyf-bubble-x" aria-label="Schliessen">&times;</button>';
 
   var panel = document.createElement('div');
@@ -103,6 +132,7 @@
   ].join('');
 
   document.body.appendChild(btn);
+  document.body.appendChild(label);
   document.body.appendChild(bubble);
   document.body.appendChild(panel);
 
@@ -188,12 +218,17 @@
 
   function hideBubble() {
     bubble.style.setProperty('display', 'none', 'important');
-    try { localStorage.setItem('fyf_bubble_seen', '1'); } catch (e) {}
+    try { sessionStorage.setItem(NUDGE_KEY, '1'); } catch (e) {}
   }
+  function hideLabel() { label.style.setProperty('display', 'none', 'important'); }
+  // Restore the resting label only when the chat panel is not open.
+  function showLabel() { if (panel.style.display !== 'flex') label.style.setProperty('display', 'flex', 'important'); }
 
   var opened = false;
   function open() {
     hideBubble();
+    hideLabel();
+    btn.classList.remove('fyf-pulse');
     panel.style.setProperty('display', 'flex', 'important');
     opened = true;
     if (!msgs.children.length) {
@@ -204,6 +239,7 @@
   }
   function close() {
     panel.style.setProperty('display', 'none', 'important');
+    showLabel();
   }
 
   btn.addEventListener('click', function () { opened ? close() : open(); opened = !opened; });
@@ -211,14 +247,14 @@
     if (e.target === bubbleX) return;
     open(); opened = true;
   });
-  bubbleX.addEventListener('click', function (e) { e.stopPropagation(); hideBubble(); });
+  bubbleX.addEventListener('click', function (e) { e.stopPropagation(); hideBubble(); showLabel(); });
 
-  /* gentle teaser: show the bubble once after 12s if the chat was never opened */
-  var bubbleSeen = false;
-  try { bubbleSeen = localStorage.getItem('fyf_bubble_seen') === '1'; } catch (e) {}
-  if (!bubbleSeen) {
+  /* gentle teaser: show the nudge once per visit if the chat was never opened */
+  var nudgeDismissed = false;
+  try { nudgeDismissed = sessionStorage.getItem(NUDGE_KEY) === '1'; } catch (e) {}
+  if (!nudgeDismissed) {
     setTimeout(function () {
-      if (!opened) bubble.style.setProperty('display', 'block', 'important');
+      if (!opened) { bubble.style.setProperty('display', 'block', 'important'); hideLabel(); }
     }, 12000);
   }
   closeBtn.addEventListener('click', function () { close(); opened = false; });
