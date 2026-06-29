@@ -26,12 +26,13 @@ from pathlib import Path
 from typing import Optional
 
 import anthropic
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from bitrix_client import create_lead
+from distill import _read_log, _scrub, run_distill
 from woo_client import WooClient, dispatch as woo_dispatch
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -68,14 +69,27 @@ LOG_PATH = ENV.get("LOG_PATH", str(HERE / "conversations.jsonl"))
 ADMIN_TOKEN = ENV.get("ADMIN_TOKEN", "")
 CONV_LOG: deque = deque(maxlen=200)
 
+# --- anonymized distillation (cards.jsonl lives next to the raw log) ---
+# Raw turns are a short buffer: phone/email are masked at write time, the whole
+# conversation is distilled into one anonymized card once it settles, and raw
+# older than RAW_RETAIN_HOURS is purged. Personal data never lives long-term.
+_LOG_DIR = os.path.dirname(LOG_PATH) or "."
+CARDS_PATH = ENV.get("CARDS_PATH", os.path.join(_LOG_DIR, "cards.jsonl"))
+MARKER_PATH = ENV.get("DISTILL_MARKER_PATH", os.path.join(_LOG_DIR, "distilled.json"))
+RAW_RETAIN_HOURS = float(ENV.get("RAW_RETAIN_HOURS", "48"))
+DISTILL_MIN_INTERVAL = 3600  # at most once an hour, kicked off after a /chat reply
+_last_distill = {"ts": 0.0}
+
 
 def _log_turn(session_id: str, user: str, assistant: str, options: list, meta: dict) -> None:
-    """Append one turn to the ring buffer and JSONL. Never breaks a reply."""
+    """Append one turn to the ring buffer and JSONL. Never breaks a reply.
+    Phone numbers and emails are masked here so the raw buffer never holds them;
+    the real lead contact still reaches Bitrix via create_lead (session memory)."""
     rec = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "session_id": session_id,
-        "user": user,
-        "assistant": assistant,
+        "user": _scrub(user),
+        "assistant": _scrub(assistant),
         "options": options,
         "tools": meta.get("tools", []),
         "lead": meta.get("lead"),
@@ -232,6 +246,29 @@ def _dispatch_tool(name: str, args: dict) -> dict:
     raise ValueError(f"unknown tool: {name}")
 
 
+def _require_admin(token: str) -> None:
+    if not ADMIN_TOKEN:
+        raise HTTPException(status_code=503, detail="ADMIN_TOKEN not configured")
+    if not hmac.compare_digest(token, ADMIN_TOKEN):
+        raise HTTPException(status_code=401, detail="unauthorized")
+
+
+def _maybe_distill() -> None:
+    """Throttled background pass: distill settled conversations into anonymized
+    cards and purge raw older than the retain window. Runs at most once an hour,
+    kicked off after a /chat reply. Never raises into the request path."""
+    now = time.time()
+    if now - _last_distill["ts"] < DISTILL_MIN_INTERVAL:
+        return
+    _last_distill["ts"] = now
+    try:
+        stats = run_distill(LOG_PATH, CARDS_PATH, MARKER_PATH, ai, MODEL,
+                            retain_hours=RAW_RETAIN_HOURS)
+        logger.info("distill: %s", stats)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("distill run failed: %s", e)
+
+
 app = FastAPI(title="Find Your Floor Assistant")
 
 app.add_middleware(
@@ -317,16 +354,31 @@ def version():
 
 @app.get("/admin/conversations")
 def admin_conversations(token: str = "", limit: int = 50):
-    """Recent conversations for quality review. Token-gated; PII inside, keep private."""
-    if not ADMIN_TOKEN:
-        raise HTTPException(status_code=503, detail="ADMIN_TOKEN not configured")
-    if not hmac.compare_digest(token, ADMIN_TOKEN):
-        raise HTTPException(status_code=401, detail="unauthorized")
+    """Recent raw turns (short buffer) for quality review. Token-gated. Phone/email
+    are masked at write time; names may persist up to RAW_RETAIN_HOURS, keep private."""
+    _require_admin(token)
     turns = _read_recent(max(1, min(limit, 500)))
     convos: dict = {}
     for t in turns:
         convos.setdefault(t.get("session_id"), []).append(t)
     return {"count": len(turns), "sessions": convos}
+
+
+@app.post("/admin/distill")
+def admin_distill(token: str = ""):
+    """Force a distillation + purge pass now (the same job /chat triggers hourly)."""
+    _require_admin(token)
+    return run_distill(LOG_PATH, CARDS_PATH, MARKER_PATH, ai, MODEL,
+                       retain_hours=RAW_RETAIN_HOURS)
+
+
+@app.get("/admin/cards")
+def admin_cards(token: str = "", limit: int = 100):
+    """Anonymized analysis cards (long-term store). No names/contacts/addresses.
+    This is the source Ilya's AIOS reads. Token-gated as defense-in-depth."""
+    _require_admin(token)
+    cards = _read_log(CARDS_PATH)[-max(1, min(limit, 1000)):]
+    return {"count": len(cards), "cards": cards}
 
 
 @app.get("/widget.js")
@@ -336,7 +388,7 @@ def serve_widget():
 
 
 @app.post("/chat", response_model=ChatResponse)
-def chat(req: ChatRequest, request: Request):
+def chat(req: ChatRequest, request: Request, background_tasks: BackgroundTasks):
     fwd = request.headers.get("x-forwarded-for", "")
     ip = fwd.split(",")[0].strip() if fwd else (request.client.host if request.client else "unknown")
     if _rate_limited(ip):
@@ -359,6 +411,7 @@ def chat(req: ChatRequest, request: Request):
 
     reply, options = _extract_chips(reply_raw)
     _log_turn(sid, req.message, reply, options, meta)
+    background_tasks.add_task(_maybe_distill)
     return ChatResponse(reply=reply, session_id=sid, options=options)
 
 

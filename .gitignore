@@ -1,5 +1,7 @@
 .env
 conversations*.jsonl
+cards*.jsonl
+distilled.json
 __pycache__/
 *.pyc
 *.pyo
