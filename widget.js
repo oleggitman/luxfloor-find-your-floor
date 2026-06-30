@@ -89,12 +89,15 @@
     'padding:8px 10px;font-size:13px;outline:none;resize:none;}',
     '#fyf-send{background:#A88E77;color:#fff;border:none;',
     'border-radius:8px;padding:8px 14px;cursor:pointer;font-size:13px;}',
+    // Mobile only: the site's own WhatsApp + back-to-top stack sits ~60px higher
+    // here than on desktop, so the cluster is lifted 45px to keep the same clean
+    // gap above it. Desktop offsets above are unchanged.
     '@media(max-width:480px){',
     '#fyf-panel{width:100vw;right:0;bottom:0;border-radius:12px 12px 0 0;',
     'max-height:80vh;}',
-    '#fyf-btn{bottom:150px!important;right:16px!important;}',
-    '#fyf-label{bottom:162px!important;right:80px!important;}',
-    '#fyf-bubble{bottom:216px!important;right:16px!important;max-width:78vw!important;}}',
+    '#fyf-btn{bottom:195px!important;right:16px!important;}',
+    '#fyf-label{bottom:207px!important;right:80px!important;}',
+    '#fyf-bubble{bottom:261px!important;right:16px!important;max-width:78vw!important;}}',
     '@media(max-width:400px){#fyf-label{display:none!important;}}',
   ].join('');
 
