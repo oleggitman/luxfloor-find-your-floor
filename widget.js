@@ -10,7 +10,7 @@
 
   var SESSION_KEY = 'fyf_session_id';
   var sessionId = null;
-  var OPENING_CHIPS = ['Beraten Sie mich', 'Ich suche einen Boden', 'Ich habe eine Frage'];
+  var OPENING_CHIPS = ['Beraten Sie mich', 'Ich suche einen Boden', 'Ich habe eine Frage', 'Kostenloses Muster bestellen'];
   try { sessionId = localStorage.getItem(SESSION_KEY); } catch (e) {}
 
   // Nudge re-shows once per visit (sessionStorage). Drop the old once-forever
@@ -238,6 +238,7 @@
   function showLabel() { if (panel.style.display !== 'flex') label.style.setProperty('display', 'flex', 'important'); }
 
   var opened = false;
+  var userInteracted = false;
   function open() {
     hideBubble();
     hideLabel();
@@ -255,22 +256,26 @@
     showLabel();
   }
 
-  btn.addEventListener('click', function () { opened ? close() : open(); opened = !opened; });
+  btn.addEventListener('click', function () { userInteracted = true; opened ? close() : open(); opened = !opened; });
   bubble.addEventListener('click', function (e) {
     if (e.target === bubbleX) return;
-    open(); opened = true;
+    userInteracted = true; open(); opened = true;
   });
-  bubbleX.addEventListener('click', function (e) { e.stopPropagation(); hideBubble(); showLabel(); });
+  bubbleX.addEventListener('click', function (e) { e.stopPropagation(); userInteracted = true; hideBubble(); showLabel(); });
 
-  /* gentle teaser: show the nudge once per visit if the chat was never opened */
+  /* After 12s, auto-open the chat once per visit so it is actually seen. Skip if
+     the visitor already opened/closed/dismissed it, or if it already fired this
+     visit (NUDGE_KEY in sessionStorage). Ilya asked for the window to open itself. */
   var nudgeDismissed = false;
   try { nudgeDismissed = sessionStorage.getItem(NUDGE_KEY) === '1'; } catch (e) {}
   if (!nudgeDismissed) {
     setTimeout(function () {
-      if (!opened) { bubble.style.setProperty('display', 'block', 'important'); hideLabel(); }
+      if (opened || userInteracted) return;   // respect any manual interaction
+      open(); opened = true;                   // open the panel on its own
+      try { sessionStorage.setItem(NUDGE_KEY, '1'); } catch (e) {}  // once per visit
     }, 12000);
   }
-  closeBtn.addEventListener('click', function () { close(); opened = false; });
+  closeBtn.addEventListener('click', function () { userInteracted = true; close(); opened = false; });
 
   /* ---- send ---- */
   var busy = false;

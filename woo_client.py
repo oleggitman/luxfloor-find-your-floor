@@ -327,6 +327,58 @@ class WooClient:
                 return None
         return None
 
+    # ---- TOOL 3: lookup_product --------------------------------------------
+    def lookup_product(self, *, query: str, limit: int = 3) -> dict:
+        """Resolve a specific product the visitor names: an article number/SKU,
+        a product name, or a pasted lux-floor.de link. Woo exact `sku=` only
+        matches the full SKU; `search=` matches the code's core (e.g. '2157',
+        'D2935') but not the full 'CheckOne-2157' / 'FAL-D2935' token. So we try,
+        in order: exact SKU, free-text search on the query, then search on the
+        code-like tokens inside it. Returns up to `limit` deduped cards; count=0
+        means nothing matched (the assistant should escalate honestly)."""
+        q = (query or "").strip()
+        if not q:
+            return {"count": 0, "products": []}
+
+        # a pasted shop link: use the last path slug as the search term
+        if q.startswith(("http://", "https://")) or "lux-floor.de" in q:
+            slug = q.rstrip("/").split("/")[-1]
+            slug = re.sub(r"\.html?$", "", slug)
+            q = slug.replace("-", " ").strip() or q
+
+        hits: list[dict] = []
+        seen_ids: set = set()
+
+        def add(products) -> None:
+            for p in products or []:
+                pid = p.get("id")
+                if pid and pid not in seen_ids:
+                    seen_ids.add(pid)
+                    hits.append(p)
+
+        # 1. exact SKU
+        try:
+            add(self._get("products", sku=q).json())
+        except requests.HTTPError:
+            pass
+        # 2. free-text search on the whole query
+        if len(hits) < limit:
+            try:
+                add(self._get("products", search=q, per_page=10, status="publish").json())
+            except requests.HTTPError:
+                pass
+        # 3. search on code-like tokens (numbers/decor codes: 2157, D2935, 4161)
+        if len(hits) < limit:
+            tokens = [t for t in re.split(r"[^A-Za-z0-9]+", q) if re.search(r"\d{3,}", t)]
+            for tok in list(dict.fromkeys(tokens))[:3]:
+                try:
+                    add(self._get("products", search=tok, per_page=10, status="publish").json())
+                except requests.HTTPError:
+                    pass
+
+        cards = [self._card(p) for p in hits[:limit]]
+        return {"count": len(cards), "products": cards}
+
 
 # Tool dispatch map for the harness / backend
 def dispatch(name: str, args: dict, client: WooClient):
@@ -334,6 +386,8 @@ def dispatch(name: str, args: dict, client: WooClient):
         return client.search_products(**args)
     if name == "estimate_shipping":
         return client.estimate_shipping(**args)
+    if name == "lookup_product":
+        return client.lookup_product(**args)
     raise ValueError(f"unknown tool {name}")
 
 

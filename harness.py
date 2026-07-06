@@ -77,6 +77,23 @@ TOOLS = [
             "required": ["items"],
         },
     },
+    {
+        "name": "lookup_product",
+        "description": (
+            "Look up a SPECIFIC product the visitor names: an article number/SKU "
+            "(e.g. CheckOne-2157, D2935), an exact product name, or a pasted "
+            "lux-floor.de link. Returns up to `limit` full cards. If count is 0, "
+            "say so plainly and escalate; never invent a price or specs."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "limit": {"type": "integer", "default": 3},
+            },
+            "required": ["query"],
+        },
+    },
 ]
 
 # Static system blocks; cache the big KB so repeated turns are cheap.

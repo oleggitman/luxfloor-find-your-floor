@@ -172,6 +172,51 @@ def test_shipping_bad_sku():
     check("status error (not a crash, not a fake rate)", est["status"] == "error", str(est))
 
 
+# --- lookup_product (specific product by code/name/link) --------------------
+def test_lookup_exact_sku():
+    print("\nlookup_product: exact SKU is resolved")
+    res = woo.lookup_product(query="CheckOne-2157")
+    check("finds at least 1", res["count"] >= 1, str(res["count"]))
+    if res["products"]:
+        p = res["products"][0]
+        check("card carries a real price + name",
+              bool(p["name"]) and p["price"] and p["price"] > 0,
+              f"name={p['name']!r} price={p['price']}")
+
+
+def test_lookup_code_token():
+    print("\nlookup_product: prefixed/hyphenated code resolves via its core token")
+    # visitors type 'FAL-D2935'; Woo search only matches the 'D2935' core token
+    res = woo.lookup_product(query="FAL-D2935")
+    check("finds candidates for D2935", res["count"] >= 1, str(res["count"]))
+
+
+def test_lookup_by_name():
+    print("\nlookup_product: product name resolves")
+    res = woo.lookup_product(query="Kronotex Amazone")
+    check("finds candidates by name", res["count"] >= 1, str(res["count"]))
+
+
+def test_lookup_by_link():
+    print("\nlookup_product: pasted shop link resolves via its slug")
+    res = woo.lookup_product(
+        query="https://lux-floor.de/shop/wand/1798-falquon-d2935-weiss-wandpaneel/")
+    check("finds candidates from the link slug", res["count"] >= 1, str(res["count"]))
+
+
+def test_lookup_not_found():
+    print("\nlookup_product: unknown code returns empty (honest escalation, no invention)")
+    res = woo.lookup_product(query="DURATEST disk 91123")
+    check("count == 0 for a non-catalog code", res["count"] == 0, str(res["count"]))
+    check("empty products list", res["products"] == [])
+
+
+def test_lookup_empty_query():
+    print("\nlookup_product: empty query is safe")
+    res = woo.lookup_product(query="   ")
+    check("count == 0, no crash", res["count"] == 0, str(res))
+
+
 def main():
     print("=" * 60)
     print("FIND YOUR FLOOR — HANDLER REGRESSION SUITE (live catalog)")
@@ -180,7 +225,9 @@ def main():
               test_waterproof_bad, test_usage_class_floor, test_budget_cap,
               test_no_fit_fallback, test_cards_have_shipping_fields,
               test_shipping_math, test_shipping_small_order,
-              test_shipping_abroad_escalates, test_shipping_bad_sku]:
+              test_shipping_abroad_escalates, test_shipping_bad_sku,
+              test_lookup_exact_sku, test_lookup_code_token, test_lookup_by_name,
+              test_lookup_by_link, test_lookup_not_found, test_lookup_empty_query]:
         try:
             t()
         except Exception as e:

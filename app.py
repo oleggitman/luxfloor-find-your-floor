@@ -155,6 +155,26 @@ TOOLS = [
         },
     },
     {
+        "name": "lookup_product",
+        "description": (
+            "Look up a SPECIFIC product the visitor names: an article number/SKU "
+            "(e.g. CheckOne-2157, D2935), an exact product name, or a pasted "
+            "lux-floor.de link. Use this whenever the customer references a concrete "
+            "product rather than a profile. Returns up to `limit` full cards (name, "
+            "sku, price, on-sale, surface/optik/format, usage class, url, m2-per-"
+            "package, weight). If count is 0, say so plainly and offer to help "
+            "differently or pass it to the team, never invent a price or specs."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "The article number, product name, or shop link the visitor gave."},
+                "limit": {"type": "integer", "default": 3},
+            },
+            "required": ["query"],
+        },
+    },
+    {
         "name": "estimate_shipping",
         "description": (
             "Estimate domestic German (Festland) shipping cost for the chosen "
@@ -239,7 +259,7 @@ def _prune_sessions():
 
 
 def _dispatch_tool(name: str, args: dict) -> dict:
-    if name in ("search_products", "estimate_shipping"):
+    if name in ("search_products", "estimate_shipping", "lookup_product"):
         return woo_dispatch(name, args, woo)
     if name == "create_lead":
         return create_lead(args, ENV)

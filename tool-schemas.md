@@ -145,4 +145,31 @@ Creates a scored lead in Bitrix24 from the completed profile. Call only after DS
 
 ---
 
+## 4. `lookup_product`
+
+Resolves a SPECIFIC product the visitor names (article number/SKU, exact product name, or a pasted lux-floor.de link) into full product cards. Complements `search_products` (which is profile/attribute-based): use `lookup_product` when the customer already references a concrete product. Read-only against WooCommerce.
+
+```json
+{
+  "name": "lookup_product",
+  "description": "Look up a specific product the visitor names: an article number/SKU (e.g. CheckOne-2157, D2935), an exact product name, or a pasted lux-floor.de link. Use whenever the customer references a concrete product rather than a profile. Returns up to `limit` full cards (name, sku, price, on-sale, surface/optik/format, usage class, url, m2-per-package, weight). If count is 0, say so plainly and offer to help differently or pass it to the team; never invent a price or specs.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "query": { "type": "string", "description": "The article number, product name, or shop link the visitor gave." },
+      "limit": { "type": "integer", "default": 3, "description": "Max products to return." }
+    },
+    "required": ["query"]
+  }
+}
+```
+
+**Handler responsibility (backend, not the model):**
+- Try, in order, stopping once enough hits: exact WooCommerce `sku=`, then free-text `search=` on the whole query, then `search=` on the code-like tokens inside it (a bare SKU like `CheckOne-2157` is matched exactly; `search=` only finds the code core such as `2157` or `D2935`, so the tokens matter).
+- A pasted shop link: strip to the last path slug and search that.
+- Return the same card shape as `search_products`, deduped by product id, up to `limit`.
+- `count: 0` means nothing matched: the model must escalate honestly, not fabricate.
+
+---
+
 *v1. Contract locked off find-your-floor-spec.md §4.2. Enum values may be tuned to the live catalog/CRM in Phase 0; structure is fixed.*

@@ -50,4 +50,23 @@ von `DEINE-URL.onrender.com` durch die neue URL ersetzen.
 
 ---
 
+## WICHTIG: WP Rocket (Caching-Plugin)
+
+lux-floor.de nutzt WP Rocket. Zwei Einstellungen muessen das Widget dauerhaft
+ausschliessen, sonst startet der Chat nicht von selbst und Updates kommen nicht an:
+
+1. WP Rocket, Tab "File Optimization", Block "Delay JavaScript Execution", Feld
+   "Excluded JavaScript Files": `luxfloor-find-your-floor.onrender.com` eintragen.
+   (Ohne das laedt WP Rocket das Widget als `type="text/rocketlazyloadscript"`,
+   dann erscheint die Chat-Sprechblase erst nach dem Scrollen.)
+2. Gleichen Eintrag im Block "Minify JavaScript files", Feld "Excluded
+   JavaScript Files". (Sonst serviert WP Rocket eine alte, zwischengespeicherte
+   Kopie, und neue Deploys erreichen die Seite nicht.)
+3. Speichern, dann "Clear cache".
+
+Danach laedt das Widget direkt von Render, ist immer aktuell und startet ohne
+Interaktion. Status: erledigt und verifiziert am 2026-07-01.
+
+---
+
 Fragen: Oleg kontaktieren.
