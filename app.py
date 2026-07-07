@@ -67,6 +67,9 @@ MODEL = ENV.get("ASSISTANT_MODEL", "claude-sonnet-4-6")
 # the buffer is per-process if workers are ever added.
 LOG_PATH = ENV.get("LOG_PATH", str(HERE / "conversations.jsonl"))
 ADMIN_TOKEN = ENV.get("ADMIN_TOKEN", "")
+# Read-only token, scoped to the anonymized /admin/cards feed only. Safe to hand
+# to a client's own AIOS: it cannot read raw conversations or trigger distill/purge.
+CARDS_TOKEN = ENV.get("CARDS_TOKEN", "")
 CONV_LOG: deque = deque(maxlen=200)
 
 # --- anonymized distillation (cards.jsonl lives next to the raw log) ---
@@ -273,6 +276,16 @@ def _require_admin(token: str) -> None:
         raise HTTPException(status_code=401, detail="unauthorized")
 
 
+def _require_cards(token: str) -> None:
+    """Auth for the anonymized cards feed: the read-only CARDS_TOKEN OR the
+    full ADMIN_TOKEN. Lets a client's AIOS read cards without the master key."""
+    if CARDS_TOKEN and hmac.compare_digest(token, CARDS_TOKEN):
+        return
+    if ADMIN_TOKEN and hmac.compare_digest(token, ADMIN_TOKEN):
+        return
+    raise HTTPException(status_code=401, detail="unauthorized")
+
+
 def _maybe_distill() -> None:
     """Throttled background pass: distill settled conversations into anonymized
     cards and purge raw older than the retain window. Runs at most once an hour,
@@ -395,8 +408,8 @@ def admin_distill(token: str = ""):
 @app.get("/admin/cards")
 def admin_cards(token: str = "", limit: int = 100):
     """Anonymized analysis cards (long-term store). No names/contacts/addresses.
-    This is the source Ilya's AIOS reads. Token-gated as defense-in-depth."""
-    _require_admin(token)
+    This is the source Ilya's AIOS reads. Read-only CARDS_TOKEN or ADMIN_TOKEN."""
+    _require_cards(token)
     cards = _read_log(CARDS_PATH)[-max(1, min(limit, 1000)):]
     return {"count": len(cards), "cards": cards}
 
