@@ -10,7 +10,7 @@ is acceptable for v1 (user starts a fresh chat).
 Tools wired:
   search_products   -> woo_client
   estimate_shipping -> woo_client
-  create_lead       -> bitrix_client
+  create_lead       -> twenty_client
 """
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from bitrix_client import create_lead
+from twenty_client import create_lead
 from distill import _read_log, _scrub, run_distill
 from woo_client import WooClient, dispatch as woo_dispatch
 
@@ -87,7 +87,7 @@ _last_distill = {"ts": 0.0}
 def _log_turn(session_id: str, user: str, assistant: str, options: list, meta: dict) -> None:
     """Append one turn to the ring buffer and JSONL. Never breaks a reply.
     Phone numbers and emails are masked here so the raw buffer never holds them;
-    the real lead contact still reaches Bitrix via create_lead (session memory)."""
+    the real lead contact still reaches the CRM via create_lead (session memory)."""
     rec = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "session_id": session_id,
@@ -206,7 +206,7 @@ TOOLS = [
     {
         "name": "create_lead",
         "description": (
-            "Create a lead in Bitrix24 with the captured profile, contact, and consent. "
+            "Create a lead in the CRM with the captured profile, contact, and consent. "
             "Call once: after the customer has given DSGVO consent and at least "
             "Name + (Telefon/WhatsApp OR E-Mail) + Stadt + PLZ. "
             "Do NOT call without consent. The backend computes the estimated value "
