@@ -113,6 +113,20 @@ def sqm_per_ve(product: dict) -> float | None:
     return None
 
 
+def price_per_sqm(product: dict) -> float | None:
+    """The €/m² the website actually shows = Woo `price` (which is the price per
+    PACKAGE / VE) divided by m²-per-package. Verified 1:1 against live product
+    pages 2026-07-09, both a normal (4161 Freetown: 70,20/2,341 = 29,99 €/m²) and
+    a discounted item (4162 Cherry: 58,50/2,341 = 24,99 €/m²). Woo's `price` is
+    already the current (sale-adjusted) package price, so this is the live €/m²."""
+    try:
+        pkg = float(product.get("price") or 0)
+    except (TypeError, ValueError):
+        return None
+    spv = sqm_per_ve(product)
+    return round(pkg / spv, 2) if (pkg > 0 and spv and spv > 0) else None
+
+
 def max_nutzungsklasse(product: dict) -> int | None:
     vals = attr_values(product, ATTR_NUTZUNGSKLASSE)
     nk = []
@@ -212,7 +226,7 @@ class WooClient:
         def rank_key(c):
             return (
                 -(2 * c["is_eigenmarke"] + 1 * c["on_sale"]),  # commercial pref
-                c["price"] if c["price"] else 1e9,             # cheaper first within tier
+                c["price_per_sqm_eur"] or 1e9,                 # cheaper €/m² first within tier
             )
         fitting.sort(key=rank_key)
         return {"count": len(fitting), "products": fitting[:limit]}
@@ -238,13 +252,12 @@ class WooClient:
         if ("waterproof" in constraints or room == "Bad") and \
                 (attr_value(p, ATTR_NASSBEREICH) or "").strip().lower() != "ja":
             return False
-        # budget
+        # budget: the cap is €/m² (budget_max_eur_per_sqm). Woo `price` is the
+        # package price, so compare against the derived €/m², never the raw price.
         if budget_max:
-            try:
-                if float(p.get("price") or 0) > budget_max:
-                    return False
-            except ValueError:
-                pass
+            ppsqm = price_per_sqm(p)
+            if ppsqm is not None and ppsqm > budget_max:
+                return False
         return True
 
     @staticmethod
@@ -256,18 +269,31 @@ class WooClient:
     def _card(p: dict) -> dict:
         hersteller = attr_value(p, ATTR_HERSTELLER) or ""
         img = (p.get("images") or [{}])[0].get("src", "")
+        # Woo `price` = price per PACKAGE (VE). Expose BOTH prices explicitly and
+        # unit-labeled so the model never confuses €/m² with the package price.
         try:
-            price = float(p.get("price") or 0)
-        except ValueError:
-            price = 0.0
+            pkg_price = float(p.get("price") or 0)
+        except (TypeError, ValueError):
+            pkg_price = 0.0
+        try:
+            reg_price = float(p.get("regular_price") or 0)
+        except (TypeError, ValueError):
+            reg_price = 0.0
+        spv = sqm_per_ve(p)
+        per_sqm = price_per_sqm(p)
+        on_sale = bool(p.get("on_sale"))
+        # original €/m² (for the strikethrough) only when actually on sale
+        per_sqm_original = (round(reg_price / spv, 2)
+                            if (on_sale and reg_price and spv) else None)
         return {
             "name": p.get("name"),
             "sku": p.get("sku") or str(p.get("id")),
             "id": p.get("id"),
             "image_url": img,
-            "price": price,
-            "sale_price": p.get("sale_price") or None,
-            "on_sale": bool(p.get("on_sale")),
+            "price_per_sqm_eur": per_sqm,             # headline price to show, €/m²
+            "price_per_sqm_original_eur": per_sqm_original,  # strikethrough if on sale
+            "price_per_package_eur": round(pkg_price, 2) if pkg_price else None,
+            "on_sale": on_sale,
             "is_eigenmarke": hersteller.strip().upper() == OWN_BRAND_VALUE,
             "hersteller": hersteller,
             "nutzungsklasse": max_nutzungsklasse(p),
@@ -276,7 +302,7 @@ class WooClient:
             "format": attr_value(p, ATTR_FORMAT),
             "url": p.get("permalink"),
             "weight_kg_per_ve": de_num(p.get("weight")),
-            "sqm_per_ve": sqm_per_ve(p),
+            "sqm_per_ve": spv,
         }
 
     # ---- TOOL 2: estimate_shipping -----------------------------------------

@@ -164,9 +164,12 @@ TOOLS = [
             "(e.g. CheckOne-2157, D2935), an exact product name, or a pasted "
             "lux-floor.de link. Use this whenever the customer references a concrete "
             "product rather than a profile. Returns up to `limit` full cards (name, "
-            "sku, price, on-sale, surface/optik/format, usage class, url, m2-per-"
-            "package, weight). If count is 0, say so plainly and offer to help "
-            "differently or pass it to the team, never invent a price or specs."
+            "sku, price_per_sqm_eur = headline €/m², price_per_package_eur = price of "
+            "one Paket, sqm_per_ve = m² per Paket, on-sale, surface/optik/format, usage "
+            "class, url, weight). Lead with the €/m² price and add the Paket in "
+            "parentheses; never label the package price as €/m². If count is 0, say so "
+            "plainly and offer to help differently or pass it to the team, never invent "
+            "a price or specs."
         ),
         "input_schema": {
             "type": "object",

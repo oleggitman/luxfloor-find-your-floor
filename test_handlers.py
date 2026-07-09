@@ -99,9 +99,9 @@ def test_budget_cap():
     print("\nsearch_products: budget cap")
     res = woo.search_products(constraints=[], budget_max_eur_per_sqm=20, limit=8)
     prods = res["products"]
-    over = [p for p in prods if p["price"] and p["price"] > 20]
+    over = [p for p in prods if p["price_per_sqm_eur"] and p["price_per_sqm_eur"] > 20]
     check("no product over 20 EUR/m²", not over,
-          str([(p["sku"], p["price"]) for p in over]))
+          str([(p["sku"], p["price_per_sqm_eur"]) for p in over]))
 
 
 def test_no_fit_fallback():
@@ -180,8 +180,8 @@ def test_lookup_exact_sku():
     if res["products"]:
         p = res["products"][0]
         check("card carries a real price + name",
-              bool(p["name"]) and p["price"] and p["price"] > 0,
-              f"name={p['name']!r} price={p['price']}")
+              bool(p["name"]) and p["price_per_sqm_eur"] and p["price_per_sqm_eur"] > 0,
+              f"name={p['name']!r} price/m²={p['price_per_sqm_eur']} pkg={p['price_per_package_eur']}")
 
 
 def test_lookup_code_token():
