@@ -109,7 +109,7 @@
   var btn = document.createElement('button');
   btn.id = 'fyf-btn';
   btn.className = 'fyf-pulse';
-  btn.setAttribute('aria-label', 'KI-Berater starten');
+  btn.setAttribute('aria-label', 'KI-Bodenberater starten');
   btn.innerHTML = '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>';
 
   // Always-visible label so the icon is never a mystery (resting state).
@@ -117,13 +117,13 @@
   label.id = 'fyf-label';
   label.setAttribute('lang', 'de');
   label.setAttribute('translate', 'no');
-  label.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>KI-Berater';
+  label.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>KI-Bodenberater';
 
   var bubble = document.createElement('div');
   bubble.id = 'fyf-bubble';
   bubble.setAttribute('lang', 'de');
   bubble.setAttribute('translate', 'no');
-  bubble.innerHTML = 'Ich bin der KI-Berater von Lux-Floor und helfe Ihnen, den passenden Boden zu finden.' +
+  bubble.innerHTML = 'Ich bin der KI-Bodenberater von Lux-Floor und helfe Ihnen, den passenden Boden zu finden, verständlich und in Ruhe.' +
     '<button id="fyf-bubble-x" aria-label="Schliessen">&times;</button>';
 
   var panel = document.createElement('div');
@@ -132,7 +132,7 @@
   panel.setAttribute('translate', 'no');
   panel.innerHTML = [
     '<div id="fyf-head">',
-    '  <span>KI-Berater</span>',
+    '  <span>KI-Bodenberater</span>',
     '  <button id="fyf-close" aria-label="Schliessen">&times;</button>',
     '</div>',
     '<div id="fyf-msgs"></div>',
@@ -246,7 +246,7 @@
     panel.style.setProperty('display', 'flex', 'important');
     opened = true;
     if (!msgs.children.length) {
-      addMsg('Herzlich willkommen! Ich bin der KI-Berater von Lux-Floor, ein digitaler Assistent, und helfe Ihnen gern weiter. Wie kann ich Ihnen helfen?', 'bot');
+      addMsg('Herzlich willkommen bei Lux-Floor! Ich bin Ihr KI-Bodenberater, ein digitaler Assistent. Ich finde mit Ihnen den passenden Boden, erkläre die Unterschiede und beantworte alle Ihre Fragen. Wie kann ich Ihnen helfen?', 'bot');
       renderChips(OPENING_CHIPS);
     }
     input.focus();
