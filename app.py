@@ -442,13 +442,54 @@ def chat(req: ChatRequest, request: Request, background_tasks: BackgroundTasks):
     messages = session["messages"]
     messages.append({"role": "user", "content": req.message})
 
+    mark = len(messages)
     reply_raw, meta = _run_turn(messages)
+    guarded = False
+    for _ in range(2):  # guard: no price in a turn that showed no product/shipping
+        if not _needs_price_guard(reply_raw, meta):
+            break
+        guarded = True
+        base = messages[:mark]  # up to and including the user's message
+        reply_raw, meta2 = _run_turn(base + [{"role": "user", "content": _NO_PRICE_CORRECTION}])
+        meta = {"tools": meta.get("tools", []) + meta2.get("tools", []),
+                "lead": meta2.get("lead") or meta.get("lead"), "price_guard": True}
+    if guarded:  # replace the leaking draft with the clean reply, keep history natural
+        del messages[mark:]
+        messages.append({"role": "assistant", "content": reply_raw})
     session["last_active"] = time.time()
 
     reply, options = _extract_chips(reply_raw)
     _log_turn(sid, req.message, reply, options, meta)
     background_tasks.add_task(_maybe_distill)
     return ChatResponse(reply=reply, session_id=sid, options=options)
+
+
+_PRICE_RE = re.compile(
+    r"\d[\d.,]*\s*€|€\s*\d|€/m|\bstatt\s+\d|\breduziert\b|\brabatt\b|"
+    r"\bschn[aä]ppchen\b|\d+\s*%|\bprozent\b|\bgespart\b",
+    re.IGNORECASE,
+)
+_PRICE_OK_TOOLS = {"lookup_product", "search_products", "estimate_shipping"}
+_NO_PRICE_CORRECTION = (
+    "[System-Korrektur] Der Kunde hat keine Flaeche (m2) genannt, und du hast in "
+    "diesem Zug kein Produkt herausgesucht und keinen Versand berechnet. Antworte "
+    "OHNE jeden Preis, Euro-Betrag, 'statt', 'reduziert', Rabatt oder Schnaeppchen. "
+    "Bestaetige nur freundlich und vertage: den genauen Preis und den Versand "
+    "rechnest du oder das Team, sobald die m2 da sind (Laenge mal Breite messen). "
+    "Biete ruhig ein kostenloses Muster an. Falls der Kunde gerade ausdruecklich "
+    "nach einem Preis gefragt hat, rufe stattdessen lookup_product auf und nenne den "
+    "echten Preis. Gib nur die neue Antwort aus."
+)
+
+
+def _needs_price_guard(reply: str, meta: dict) -> bool:
+    """A price belongs only in a turn that actually presented a product or computed
+    shipping. If none of those tools ran this turn but the reply still names a price
+    or discount, it is a gratuitous re-mention (the classic case: the visitor has no
+    m2 and the bot re-sells the discount anyway). Then we regenerate the reply without
+    a price, never hand-editing the German text (that would mangle it)."""
+    showed = any(t in _PRICE_OK_TOOLS for t in meta.get("tools", []))
+    return (not showed) and bool(_PRICE_RE.search(reply or ""))
 
 
 def _run_turn(messages: list) -> tuple[str, dict]:

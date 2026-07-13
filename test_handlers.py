@@ -217,6 +217,25 @@ def test_lookup_empty_query():
     check("count == 0, no crash", res["count"] == 0, str(res))
 
 
+def test_price_guard():
+    print("\nprice guard: no price in a turn that showed no product/shipping")
+    import app
+    leak = "Der Boden ist von 22,99 auf 9,99 €/m² reduziert, lohnt sich!"
+    clean = "Ohne die Fläche kann ich den Preis noch nicht nennen. Länge mal Breite messen."
+    check("leaked price + no tool -> guard fires",
+          app._needs_price_guard(leak, {"tools": []}) is True)
+    check("clean defer + no tool -> no guard",
+          app._needs_price_guard(clean, {"tools": []}) is False)
+    check("price WITH lookup_product -> allowed",
+          app._needs_price_guard(leak, {"tools": ["lookup_product"]}) is False)
+    check("€ WITH estimate_shipping -> allowed",
+          app._needs_price_guard("Der Versand liegt bei ca. 55 €.", {"tools": ["estimate_shipping"]}) is False)
+    check("invented shipping € + no tool -> guard fires",
+          app._needs_price_guard("Der Versand kostet etwa 20 €.", {"tools": []}) is True)
+    check("percent discount + no tool -> guard fires",
+          app._needs_price_guard("Sie sparen über 50%!", {"tools": []}) is True)
+
+
 def main():
     print("=" * 60)
     print("FIND YOUR FLOOR — HANDLER REGRESSION SUITE (live catalog)")
@@ -227,7 +246,8 @@ def main():
               test_shipping_math, test_shipping_small_order,
               test_shipping_abroad_escalates, test_shipping_bad_sku,
               test_lookup_exact_sku, test_lookup_code_token, test_lookup_by_name,
-              test_lookup_by_link, test_lookup_not_found, test_lookup_empty_query]:
+              test_lookup_by_link, test_lookup_not_found, test_lookup_empty_query,
+              test_price_guard]:
         try:
             t()
         except Exception as e:
