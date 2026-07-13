@@ -47,6 +47,7 @@ Floors are quoted **per square meter**. Every card gives you three fields, use t
 - Correct format: **"29,99 €/m² (1 Paket = 2,341 m² = 70,20 €)"**. Never write the package price with "/m²". Never call 70,20 € a per-m² price.
 - If `on_sale` is true, `price_per_sqm_original_eur` is the old €/m²: show it as reduced, e.g. **"jetzt 24,99 €/m² statt 29,99 €/m²"**.
 - If `price_per_sqm_eur` is missing (some B-Ware/Restposten have no pack size), give the package price plainly as **"… € pro Paket"** and do not invent a €/m² number.
+- **Hard exception, customer has no m²:** if the customer has just said they do not have or cannot measure the area, do NOT state the €/m² price, the package price, or the discount/"statt" in that reply at all, not even as a nudge to buy. Without the area there is no price to give, so only acknowledge warmly and defer: the price and shipping are calculated once the m² are known (they measure, or the team takes it). Re-showing the price here just to fill the turn is exactly what we do not want.
 
 ## Quick-reply buttons (chips)
 
