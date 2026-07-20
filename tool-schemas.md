@@ -170,6 +170,31 @@ Resolves a SPECIFIC product the visitor names (article number/SKU, exact product
 - Return the same card shape as `search_products`, deduped by product id, up to `limit`.
 - `count: 0` means nothing matched: the model must escalate honestly, not fabricate.
 
+## 5. `find_matching_trim`
+
+Given a floor the customer has chosen, finds the matching skirting board(s) (`Produkttyp = Sockelleiste`) that share the floor's decor code, to offer as a small upsell. Read-only against WooCommerce.
+
+```json
+{
+  "name": "find_matching_trim",
+  "description": "After the customer has settled on a concrete floor, find the matching skirting board(s) (Sockelleiste) that share the floor's decor. Pass the chosen floor's SKU/decor code/name/link. Returns up to `limit` trim cards; count=0 means no exact colour-matched trim exists (offer a neutral/white one or let the team match it, never invent).",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "floor_query": { "type": "string", "description": "The chosen floor's article number, decor code, name, or shop link." },
+      "limit":       { "type": "integer", "default": 3 }
+    },
+    "required": ["floor_query"]
+  }
+}
+```
+
+**Handler responsibility (backend, not the model):**
+- Resolve the floor via `lookup_product`; take its decor code tokens (e.g. `D2935`, `2141`) from SKU + name.
+- Search WooCommerce per token, keep only `Produkttyp = Sockelleiste` whose SKU/name actually contains the token (floor `D2935` -> trim `L-D2935`; floor `2141` -> trim `2141-5001`). Dedupe by product id, up to `limit`.
+- Coverage is partial: many floors (own-brand, some series) have no colour-matched trim. Return `count: 0` then; the model must offer a neutral/white Sockelleiste or defer to the team, never invent a match.
+- Trim card: `name`, `sku`, `price_eur` (per piece, NOT €/m²), `hersteller`, `image_url`, `url`. Response also echoes `floor` (resolved floor name, `null` if the floor was not found).
+
 ---
 
 *v1. Contract locked off find-your-floor-spec.md §4.2. Enum values may be tuned to the live catalog/CRM in Phase 0; structure is fixed.*

@@ -31,6 +31,8 @@ ATTR_NUTZUNGSKLASSE = "Nutzungsklasse"
 ATTR_NASSBEREICH = "Sanitär/Nassbereich"   # "Ja" -> waterproof-capable
 ATTR_KLICK = "Klicksystem"
 ATTR_FORMAT = "Format"
+ATTR_FARBE = "Farbe"                # Hell/Mittel/Dunkel + Braun/Grau/Weiß... -> color
+ATTR_PRODUKTTYP = "Produkttyp"      # Vinyl/Laminat/... incl. "Sockelleiste" (trim)
 # m2-per-package lives in any of these (first non-empty wins); all need de-number parsing
 ATTR_SQM_PER_VE = ["Paketinhalt (qm)", "Platz in einer Packung", "Karton"]
 
@@ -41,6 +43,43 @@ DESIGN_MAP = {
     "Marmoroptik": "Stein",   # no separate marble value; marble is a Stein decor
     "Uni": "Uni",
 }
+
+# spec enum `color` -> live "Farbe" values. Farbe mixes a BRIGHTNESS axis
+# (Hell/Mittel/Dunkel) with a HUE axis (Braun/Grau/Weiß...), and a product carries
+# only ONE Farbe value; ~34% of products have none. So we RANK by colour affinity
+# (a soft bonus/penalty) instead of hard-filtering, which would drop the no-Farbe
+# products and misfire across the two axes.
+COLOR_MATCH = {
+    "hell":   {"Hell", "Weiß", "Lichtgrau", "Beige"},
+    "dunkel": {"Dunkel"},
+    "braun":  {"Braun", "Grau/Braun", "Grau-Beige"},
+    "grau":   {"Grau", "Lichtgrau", "Grau/Braun", "Grau-Beige"},
+}
+# Only the brightness axis (hell<->dunkel) has an unambiguous opposite worth
+# demoting. Hue is fuzzy (a dark-brown floor is often tagged "Dunkel", not "Braun"),
+# so no hue penalty, only a positive match bonus.
+COLOR_OPPOSITE = {
+    "hell":   {"Dunkel"},
+    "dunkel": {"Hell", "Weiß", "Lichtgrau", "Beige"},
+    "braun":  set(),
+    "grau":   set(),
+}
+
+
+def color_affinity(farbe: str | None, color: str | None) -> int:
+    """+2 if the product's Farbe matches the requested colour, -2 for a clear
+    opposite (brightness axis only), 0 when neutral / unknown / not requested.
+    color=None -> always 0, so ranking is byte-for-byte unchanged when no colour."""
+    if not color:
+        return 0
+    f = (farbe or "").strip()
+    if not f:
+        return 0
+    if f in COLOR_MATCH.get(color, ()):
+        return 2
+    if f in COLOR_OPPOSITE.get(color, ()):
+        return -2
+    return 0
 
 # Festland DE rate table (knowledge-base.md §C). Standard column; weight-driven.
 # Note the non-monotonic step: 60-225kg (pallet/spedition) is a flat 50 EUR,
@@ -222,9 +261,11 @@ class WooClient:
                 continue
             fitting.append(self._card(p))
 
-        # 3. rank: own-brand+on-sale first, then own-brand OR on-sale, then rest
+        # 3. rank: requested colour first (0 when no colour, so unchanged), then
+        #    own-brand+on-sale, then own-brand OR on-sale, then rest
         def rank_key(c):
             return (
+                -color_affinity(c.get("farbe"), color),        # requested colour up, opposite down
                 -(2 * c["is_eigenmarke"] + 1 * c["on_sale"]),  # commercial pref
                 c["price_per_sqm_eur"] or 1e9,                 # cheaper €/m² first within tier
             )
@@ -300,6 +341,7 @@ class WooClient:
             "surface": attr_value(p, ATTR_OBERFLAECHE),
             "optik": attr_value(p, ATTR_OPTIK),
             "format": attr_value(p, ATTR_FORMAT),
+            "farbe": attr_value(p, ATTR_FARBE),
             "url": p.get("permalink"),
             "weight_kg_per_ve": de_num(p.get("weight")),
             "sqm_per_ve": spv,
@@ -405,6 +447,57 @@ class WooClient:
         cards = [self._card(p) for p in hits[:limit]]
         return {"count": len(cards), "products": cards}
 
+    # ---- TOOL 4: find_matching_trim (skirting cross-sell) ------------------
+    @staticmethod
+    def _trim_card(p: dict) -> dict:
+        try:
+            price = float(p.get("price") or 0)
+        except (TypeError, ValueError):
+            price = 0.0
+        img = (p.get("images") or [{}])[0].get("src", "")
+        return {
+            "name": p.get("name"),
+            "sku": p.get("sku") or str(p.get("id")),
+            "price_eur": round(price, 2) if price else None,   # per piece as in Woo
+            "hersteller": attr_value(p, ATTR_HERSTELLER) or "",
+            "image_url": img,
+            "url": p.get("permalink"),
+        }
+
+    def find_matching_trim(self, *, floor_query: str, limit: int = 3) -> dict:
+        """Given a chosen floor (SKU / decor code / name / lux-floor.de link),
+        find the matching Sockelleiste(n) that share the floor's decor code
+        (e.g. floor D2935 -> trim L-D2935, floor 2141 -> trim 2141-5001).
+        Coverage is PARTIAL: many floors have no colour-matched trim, then
+        count=0 and the assistant should offer a neutral/white Sockelleiste or
+        let the team match it, never invent one. `floor` echoes the resolved
+        floor name (None if the floor itself was not found)."""
+        fl = self.lookup_product(query=floor_query, limit=1)
+        if not fl["products"]:
+            return {"count": 0, "trims": [], "floor": None}
+        floor = fl["products"][0]
+        blob = f"{floor.get('sku', '')} {floor.get('name', '')}"
+        tokens = [t for t in re.split(r"[^A-Za-z0-9]+", blob) if re.search(r"\d{3,}", t)]
+        tokens = list(dict.fromkeys(tokens))[:4]
+        hits, seen = [], set()
+        for tok in tokens:
+            try:
+                found = self._get("products", search=tok, per_page=15,
+                                  status="publish").json()
+            except requests.HTTPError:
+                found = []
+            for p in found or []:
+                if (attr_value(p, ATTR_PRODUKTTYP) or "") != "Sockelleiste":
+                    continue
+                pid = p.get("id")
+                b = f"{p.get('sku', '')} {p.get('name', '')}".upper()
+                if pid in seen or tok.upper() not in b:
+                    continue
+                seen.add(pid)
+                hits.append(p)
+        trims = [self._trim_card(p) for p in hits[:limit]]
+        return {"count": len(trims), "trims": trims, "floor": floor.get("name")}
+
 
 # Tool dispatch map for the harness / backend
 def dispatch(name: str, args: dict, client: WooClient):
@@ -414,6 +507,8 @@ def dispatch(name: str, args: dict, client: WooClient):
         return client.estimate_shipping(**args)
     if name == "lookup_product":
         return client.lookup_product(**args)
+    if name == "find_matching_trim":
+        return client.find_matching_trim(**args)
     raise ValueError(f"unknown tool {name}")
 
 

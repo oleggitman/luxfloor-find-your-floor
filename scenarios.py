@@ -122,6 +122,25 @@ SCENARIOS = {
         ],
         "check": lambda tr, fn: _commercial(tr, fn),
     },
+    "showroom_bigproject": {
+        "desc": "Whole-home 85 m², commits to a showroom visit -> proposes a concrete slot + captures contact (not just mentions it)",
+        "turns": [
+            "Hallo, wir renovieren die komplette Wohnung, ca. 85 m²: Flur, Wohnzimmer, Küche und Schlafzimmer. Heller matter Fischgrät-Look in Vinyl, sehr strapazierfähig, ohne Fußbodenheizung.",
+            "Klingt gut. Bevor wir uns bei so einer großen Fläche entscheiden, würde ich mir den Boden gern in echt ansehen.",
+            "Ja, ich komme gern zu euch in den Showroom.",
+            "Donnerstagnachmittag würde mir gut passen.",
+        ],
+        "check": lambda tr, fn: _showroom(tr, fn),
+    },
+    "trim_upsell": {
+        "desc": "Customer picks FALQUON D2935 -> bot offers the matching Sockelleiste via find_matching_trim",
+        "turns": [
+            "Ich interessiere mich für den FALQUON D2935 Uni White fürs Wohnzimmer, ca. 20 m².",
+            "Ja, der gefällt mir, den nehme ich. Gibt es dazu auch eine passende Sockelleiste im gleichen Dekor?",
+            "Die Hochglanz Diele, bitte.",
+        ],
+        "check": lambda tr, fn: _trim(tr, fn),
+    },
     "out_of_scope": {
         "desc": "Out-of-flow question -> escalate to a human, no fabricated answer",
         "turns": [
@@ -243,6 +262,34 @@ def _commercial(tr, fn):
     if (nk is None or nk < 31) and a.get("room") != "Gewerbe":
         return False, f"no commercial NK floor (nk={nk}, room={a.get('room')})"
     return True, f"commercial durability requested (nk={nk}, room={a.get('room')})"
+
+
+def _showroom(tr, fn):
+    # create_lead is not wired in this bench, so assert on the observable behaviour
+    # once the customer COMMITS to a visit: ACTIVELY propose a concrete slot AND
+    # capture contact, instead of just naming the showroom and stopping.
+    proposes_visit = text_has(fn, ["showroom", "termin", "bei uns", "vorbei", "neuss"])
+    proposes_slot = text_has(fn, ["woche", "vormittags", "nachmittags", "wann", "welcher tag",
+                                  "passt ihnen", "uhrzeit", "10:00", "18:30"])
+    captures = asks_for_contact(fn)
+    if not proposes_visit:
+        return False, "did not actively steer to a showroom visit"
+    if not proposes_slot:
+        return False, "mentioned showroom but proposed no concrete slot/time"
+    if not captures:
+        return False, "proposed a visit but did not capture name/contact"
+    return True, "showroom visit proposed with a concrete slot + contact captured"
+
+
+def _trim(tr, fn):
+    ft = calls(tr, "find_matching_trim")
+    if not ft:
+        return False, "find_matching_trim never called after a floor was chosen"
+    if not any(t["result"].get("count", 0) >= 1 for t in ft):
+        return False, "trim tool returned no match for a floor that has one (D2935)"
+    if not text_has(fn, ["sockelleiste", "leiste"]):
+        return False, "did not offer the matching skirting in the reply"
+    return True, "offered the matching Sockelleiste via find_matching_trim"
 
 
 def _out_of_scope(tr, fn):

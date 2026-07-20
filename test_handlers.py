@@ -13,7 +13,7 @@ import math
 import sys
 
 from woo_client import (WooClient, de_num, max_nutzungsklasse, OWN_BRAND_VALUE,
-                        SHIPPING_TIERS)
+                        SHIPPING_TIERS, color_affinity)
 
 woo = WooClient()
 PASS, FAIL = 0, 0
@@ -55,6 +55,36 @@ def test_fit_gate_surface_design():
           str([p["surface"] for p in prods]))
     check("all are Stein optik", all(p["optik"] == "Stein" for p in prods),
           str([p["optik"] for p in prods]))
+
+
+def test_color_affinity():
+    print("\ncolor_affinity: soft colour ranking signal (unit, no network)")
+    check("dunkel matches Dunkel (+2)", color_affinity("Dunkel", "dunkel") == 2)
+    check("dunkel opposite Hell (-2)", color_affinity("Hell", "dunkel") == -2)
+    check("dunkel opposite Weiß (-2)", color_affinity("Weiß", "dunkel") == -2)
+    check("hell matches Weiß (+2)", color_affinity("Weiß", "hell") == 2)
+    check("hell opposite Dunkel (-2)", color_affinity("Dunkel", "hell") == -2)
+    check("grau matches Grau (+2)", color_affinity("Grau", "grau") == 2)
+    check("braun matches Braun (+2)", color_affinity("Braun", "braun") == 2)
+    check("Mittel neutral for dunkel (0)", color_affinity("Mittel", "dunkel") == 0)
+    check("no colour requested -> 0", color_affinity("Hell", None) == 0)
+    check("no Farbe on product -> 0", color_affinity(None, "dunkel") == 0)
+    check("braun has no hard opposite (grau stays 0)", color_affinity("Grau", "braun") == 0)
+
+
+def test_color_dark_over_light():
+    print("\nsearch_products: colour=dunkel ranks dark over light (the fixed bug)")
+    res = woo.search_products(constraints=["waterproof"], design="Steinoptik",
+                              color="dunkel", room="Bad", limit=8)
+    prods = res["products"]
+    check("returns candidates", len(prods) >= 1, f"got {len(prods)}")
+    affs = [color_affinity(p.get("farbe"), "dunkel") for p in prods]
+    check("colour affinity non-increasing (dark ranked above light)",
+          all(affs[i] >= affs[i + 1] for i in range(len(affs) - 1)),
+          str([(p.get("farbe"), a) for p, a in zip(prods, affs)]))
+    if any(a > 0 for a in affs):
+        check("top result is a colour match when a dark product exists",
+              affs[0] > 0, str([p.get("farbe") for p in prods]))
 
 
 def test_own_brand_first():
@@ -217,6 +247,23 @@ def test_lookup_empty_query():
     check("count == 0, no crash", res["count"] == 0, str(res))
 
 
+def test_find_matching_trim():
+    print("\nfind_matching_trim: skirting shares the floor's decor code; honest 0 otherwise")
+    res = woo.find_matching_trim(floor_query="D2935")
+    check("finds a trim for D2935", res["count"] >= 1, str(res["count"]))
+    if res["trims"]:
+        blob = (res["trims"][0]["sku"] + res["trims"][0]["name"]).upper()
+        check("trim shares the decor code D2935", "D2935" in blob, res["trims"][0]["sku"])
+        check("trim card has a per-piece price (not €/m²)",
+              res["trims"][0].get("price_eur") is not None, str(res["trims"][0]))
+    res2 = woo.find_matching_trim(floor_query="4160")
+    check("no invented trim for a floor without one (own-brand 4160)",
+          res2["count"] == 0, str(res2["count"]))
+    res3 = woo.find_matching_trim(floor_query="DOES-NOT-EXIST-999")
+    check("unknown floor -> empty, floor=None",
+          res3["count"] == 0 and res3["floor"] is None, str(res3))
+
+
 def test_price_guard():
     print("\nprice guard: no price in a turn that showed no product/shipping")
     import app
@@ -240,14 +287,15 @@ def main():
     print("=" * 60)
     print("FIND YOUR FLOOR — HANDLER REGRESSION SUITE (live catalog)")
     print("=" * 60)
-    for t in [test_de_num, test_fit_gate_surface_design, test_own_brand_first,
+    for t in [test_de_num, test_color_affinity, test_color_dark_over_light,
+              test_fit_gate_surface_design, test_own_brand_first,
               test_waterproof_bad, test_usage_class_floor, test_budget_cap,
               test_no_fit_fallback, test_cards_have_shipping_fields,
               test_shipping_math, test_shipping_small_order,
               test_shipping_abroad_escalates, test_shipping_bad_sku,
               test_lookup_exact_sku, test_lookup_code_token, test_lookup_by_name,
               test_lookup_by_link, test_lookup_not_found, test_lookup_empty_query,
-              test_price_guard]:
+              test_find_matching_trim, test_price_guard]:
         try:
             t()
         except Exception as e:

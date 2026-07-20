@@ -207,6 +207,28 @@ TOOLS = [
         },
     },
     {
+        "name": "find_matching_trim",
+        "description": (
+            "After the customer has settled on a concrete floor, find the matching "
+            "skirting board(s) (Sockelleiste) that share the floor's decor, to offer "
+            "as a small upsell. Pass the chosen floor's article number/SKU, decor "
+            "code, name, or a lux-floor.de link. Returns up to `limit` trim cards "
+            "(name, sku, price_eur per piece, hersteller, image, url) plus `floor` "
+            "(the resolved floor name). count=0 means there is NO exact colour-matched "
+            "skirting for that floor: then offer a neutral/white Sockelleiste or say the "
+            "team will match the exact colour, never invent one. Do not call before a "
+            "floor is chosen."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "floor_query": {"type": "string", "description": "The chosen floor's article number, decor code, name, or shop link."},
+                "limit": {"type": "integer", "default": 3},
+            },
+            "required": ["floor_query"],
+        },
+    },
+    {
         "name": "create_lead",
         "description": (
             "Create a lead in the CRM with the captured profile, contact, and consent. "
@@ -265,7 +287,8 @@ def _prune_sessions():
 
 
 def _dispatch_tool(name: str, args: dict) -> dict:
-    if name in ("search_products", "estimate_shipping", "lookup_product"):
+    if name in ("search_products", "estimate_shipping", "lookup_product",
+                "find_matching_trim"):
         return woo_dispatch(name, args, woo)
     if name == "create_lead":
         return create_lead(args, ENV)

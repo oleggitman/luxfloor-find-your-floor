@@ -94,6 +94,26 @@ TOOLS = [
             "required": ["query"],
         },
     },
+    {
+        "name": "find_matching_trim",
+        "description": (
+            "After the customer has settled on a concrete floor, find the matching "
+            "skirting board(s) (Sockelleiste) that share the floor's decor, to offer "
+            "as a small upsell. Pass the chosen floor's article number/SKU, decor "
+            "code, name, or a lux-floor.de link. Returns up to `limit` trim cards. "
+            "count=0 means there is NO exact colour-matched skirting for that floor: "
+            "then offer a neutral/white Sockelleiste or say the team will match the "
+            "exact colour, never invent one. Do not call before a floor is chosen."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "floor_query": {"type": "string"},
+                "limit": {"type": "integer", "default": 3},
+            },
+            "required": ["floor_query"],
+        },
+    },
 ]
 
 # Static system blocks; cache the big KB so repeated turns are cheap.
