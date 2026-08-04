@@ -18,12 +18,57 @@
   var NUDGE_KEY = 'fyf_nudge_dismissed';
   try { localStorage.removeItem('fyf_bubble_seen'); } catch (e) {}
 
+  // lux-floor.de runs WP Rocket delay-JS: while its 50 delayed scripts load it
+  // stopPropagation()s the visitor's first real interaction (element-level
+  // listeners never fire; measured live 04.08.2026: document-capture listeners
+  // still receive trusted pointerdown/pointerup, deeper nodes get nothing) and
+  // later re-dispatches the saved touch/click events as UNTRUSTED synthetics.
+  // Therefore ALL widget interaction is delegated from ONE document-capture
+  // pointer listener pair (document is first in the capture phase, so
+  // stopPropagation cannot starve it), and every synthetic click is ignored.
+  // Do not "simplify" back to element-level click handlers.
+  var MOBILE_MQ = window.matchMedia ? window.matchMedia('(max-width:480px)') : {matches: false, addEventListener: function () {}};
+  var FINE_POINTER_MQ = window.matchMedia ? window.matchMedia('(hover:hover) and (pointer:fine)') : {matches: true};
+
+  var tapTargets = [];  // [element, handler], resolved deepest-match-first per tap
+
+  function onTap(el, fn) {
+    tapTargets.push([el, fn]);
+    if (window.PointerEvent) {
+      // Neutralize native and WP-Rocket-replayed clicks so nothing fires twice.
+      el.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); });
+    } else {
+      el.addEventListener('click', function (e) { if (e.isTrusted) fn(e); });
+    }
+  }
+
+  if (window.PointerEvent) {
+    var tapPid = -1, tapX = 0, tapY = 0, tapDownTarget = null;
+    document.addEventListener('pointerdown', function (e) {
+      if (!e.isTrusted) return;
+      tapPid = e.pointerId; tapX = e.clientX; tapY = e.clientY; tapDownTarget = e.target;
+    }, true);
+    document.addEventListener('pointerup', function (e) {
+      if (!e.isTrusted || e.pointerId !== tapPid) return;
+      tapPid = -1;
+      if (Math.abs(e.clientX - tapX) > 12 || Math.abs(e.clientY - tapY) > 12) return; // a swipe, not a tap
+      var hit = null;
+      for (var i = 0; i < tapTargets.length; i++) {
+        var el = tapTargets[i][0];
+        if (el.contains(e.target) && el.contains(tapDownTarget) &&
+            (!hit || hit[0].contains(el))) hit = tapTargets[i]; // deepest match wins
+      }
+      if (hit) hit[1](e);
+    }, true);
+  }
+
   /* ---- styles ---- */
   var css = [
     '#fyf-btn{position:fixed!important;bottom:150px!important;right:20px!important;width:56px!important;height:56px!important;',
     'border-radius:50%!important;background:#A88E77!important;border:none!important;cursor:pointer!important;',
     'box-shadow:0 4px 14px rgba(0,0,0,.25)!important;z-index:2147483647!important;display:flex!important;',
-    'align-items:center!important;justify-content:center!important;padding:0!important;margin:0!important;}',
+    'align-items:center!important;justify-content:center!important;padding:0!important;margin:0!important;',
+    'touch-action:manipulation!important;}',
     '#fyf-btn svg{pointer-events:none;}',
     '#fyf-bubble{position:fixed!important;bottom:216px!important;right:20px!important;max-width:240px!important;',
     'background:#fff!important;color:#333!important;padding:11px 13px!important;border-radius:12px!important;',
@@ -57,17 +102,11 @@
     'background:#A88E77!important;color:#fff!important;border-radius:50%!important;border:none!important;',
     'font-size:13px!important;line-height:1!important;cursor:pointer!important;display:flex!important;',
     'align-items:center!important;justify-content:center!important;}',
-    '#fyf-panel{position:fixed;bottom:150px;right:20px;width:320px;',
-    'max-height:520px;display:none;flex-direction:column;',
-    'background:#fff;border-radius:12px;',
-    'box-shadow:0 8px 32px rgba(0,0,0,.18);z-index:2147483646;overflow:hidden;',
-    'font-family:system-ui,sans-serif;}',
-    '#fyf-panel.open{display:flex;}',
     '#fyf-head{background:#333333;color:#fff;padding:12px 16px;',
     'display:flex;align-items:center;justify-content:space-between;',
     'font-size:14px;font-weight:600;letter-spacing:.3px;}',
     '#fyf-close{background:none;border:none;color:#fff;font-size:18px;',
-    'cursor:pointer;line-height:1;padding:0 4px;}',
+    'cursor:pointer;line-height:1;padding:0 4px;touch-action:manipulation;}',
     '#fyf-msgs{flex:1;overflow-y:auto;padding:12px;',
     'display:flex;flex-direction:column;gap:8px;}',
     '.fyf-msg{max-width:86%;padding:8px 12px;border-radius:10px;',
@@ -81,20 +120,27 @@
     '#fyf-chips{display:none;flex-wrap:wrap;gap:6px;padding:0 12px 8px;}',
     '.fyf-chip{background:#fff;color:#A88E77;border:1px solid #A88E77;',
     'border-radius:16px;padding:6px 12px;font-size:13px;line-height:1.3;',
-    'cursor:pointer;font-family:inherit;}',
+    'cursor:pointer;font-family:inherit;touch-action:manipulation;}',
     '.fyf-chip:hover{background:#A88E77;color:#fff;}',
     '#fyf-foot{border-top:1px solid #eee;padding:8px;',
     'display:flex;gap:6px;}',
     '#fyf-input{flex:1;border:1px solid #ddd;border-radius:8px;',
     'padding:8px 10px;font-size:13px;outline:none;resize:none;}',
     '#fyf-send{background:#A88E77;color:#fff;border:none;',
-    'border-radius:8px;padding:8px 14px;cursor:pointer;font-size:13px;}',
+    'border-radius:8px;padding:8px 14px;cursor:pointer;font-size:13px;touch-action:manipulation;}',
+    // Mobile bottom-sheet children: bigger tap targets; 16px input kills the
+    // iOS focus auto-zoom. The sheet geometry itself is inline (applyLayout).
+    '#fyf-panel.fyf-mobile #fyf-head{padding:10px 16px!important;font-size:15px!important;}',
+    '#fyf-panel.fyf-mobile #fyf-close{width:44px!important;height:44px!important;font-size:24px!important;',
+    'display:flex!important;align-items:center!important;justify-content:center!important;margin:-6px -12px!important;}',
+    '#fyf-panel.fyf-mobile .fyf-chip{padding:10px 14px!important;font-size:14px!important;}',
+    '#fyf-panel.fyf-mobile #fyf-input{font-size:16px!important;}',
+    '#fyf-panel.fyf-mobile #fyf-send{padding:10px 16px!important;font-size:15px!important;}',
+    '#fyf-panel.fyf-mobile .fyf-msg{font-size:14px!important;}',
     // Mobile only: the site's own WhatsApp + back-to-top stack sits ~60px higher
     // here than on desktop, so the cluster is lifted 45px to keep the same clean
     // gap above it. Desktop offsets above are unchanged.
     '@media(max-width:480px){',
-    '#fyf-panel{width:100vw;right:0;bottom:0;border-radius:12px 12px 0 0;',
-    'max-height:80vh;}',
     '#fyf-btn{bottom:195px!important;right:16px!important;}',
     '#fyf-label{bottom:207px!important;right:80px!important;}',
     '#fyf-bubble{bottom:261px!important;right:16px!important;max-width:78vw!important;}}',
@@ -156,6 +202,46 @@
   var sendBtn = panel.querySelector('#fyf-send');
   var closeBtn = panel.querySelector('#fyf-close');
 
+  /* ---- panel layout: desktop floating card / mobile soft bottom sheet ----
+     Inline cssText with !important (not a stylesheet media query) so no theme
+     or optimizer CSS can override it; recomputed on viewport changes. */
+  var panelOpen = false;
+  var engaged = false;   // visitor joined the dialog -> sheet may grow
+
+  var PANEL_COMMON = 'position:fixed!important;flex-direction:column!important;background:#fff!important;' +
+    'z-index:2147483646!important;overflow:hidden!important;font-family:system-ui,sans-serif!important;';
+
+  function applyLayout() {
+    var show = 'display:' + (panelOpen ? 'flex' : 'none') + '!important;';
+    // The round launcher sits inside the sheet area on phones: hide it while
+    // the sheet is open (closing is the X or a tap on the page), restore after.
+    if (panelOpen && MOBILE_MQ.matches) btn.style.setProperty('display', 'none', 'important');
+    else btn.style.removeProperty('display');
+    if (MOBILE_MQ.matches) {
+      panel.classList.add('fyf-mobile');
+      var h = engaged ? '70' : '45';
+      panel.style.cssText = PANEL_COMMON + show +
+        'left:0!important;right:0!important;bottom:0!important;width:auto!important;' +
+        'max-height:' + h + 'vh!important;max-height:' + h + 'dvh!important;' +
+        'border-radius:16px 16px 0 0!important;box-shadow:0 -6px 24px rgba(0,0,0,.2)!important;' +
+        'padding-bottom:env(safe-area-inset-bottom)!important;';
+    } else {
+      panel.classList.remove('fyf-mobile');
+      panel.style.cssText = PANEL_COMMON + show +
+        'bottom:220px!important;right:20px!important;width:320px!important;max-height:520px!important;' +
+        'border-radius:12px!important;box-shadow:0 8px 32px rgba(0,0,0,.18)!important;';
+    }
+  }
+  if (MOBILE_MQ.addEventListener) MOBILE_MQ.addEventListener('change', applyLayout);
+  window.addEventListener('resize', applyLayout);
+  applyLayout();
+
+  function engage() {
+    if (engaged) return;
+    engaged = true;
+    applyLayout();
+  }
+
   /* ---- helpers ---- */
   function escapeHtml(s) {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -215,19 +301,18 @@
 
   function renderChips(options) {
     chips.innerHTML = '';
+    tapTargets = tapTargets.filter(function (t) { return t[0].isConnected !== false; });
     if (!options || !options.length) { clearChips(); return; }
     options.forEach(function (opt) {
       var b = document.createElement('button');
       b.type = 'button';
       b.className = 'fyf-chip';
       b.textContent = opt;
-      b.addEventListener('click', function () { send(opt); });
+      onTap(b, function () { send(opt); });
       chips.appendChild(b);
     });
     chips.style.setProperty('display', 'flex', 'important');
   }
-
-  panel.style.cssText = 'position:fixed!important;display:none!important;bottom:220px!important;right:20px!important;width:320px!important;max-height:520px!important;flex-direction:column!important;background:#fff!important;border-radius:12px!important;box-shadow:0 8px 32px rgba(0,0,0,.18)!important;z-index:2147483646!important;overflow:hidden!important;font-family:system-ui,sans-serif!important;';
 
   function hideBubble() {
     bubble.style.setProperty('display', 'none', 'important');
@@ -235,58 +320,74 @@
   }
   function hideLabel() { label.style.setProperty('display', 'none', 'important'); }
   // Restore the resting label only when the chat panel is not open.
-  function showLabel() { if (panel.style.display !== 'flex') label.style.setProperty('display', 'flex', 'important'); }
+  function showLabel() { if (!panelOpen) label.style.setProperty('display', 'flex', 'important'); }
 
-  var opened = false;
   var userInteracted = false;
-  function open() {
+
+  /* userInitiated: the visitor opened the chat themselves. Only then (and only
+     on mouse devices) the input takes focus. On phones focus pops the keyboard
+     over the page and steals keystrokes from the site's own m2 fields (seen in
+     the production logs), so mobile never auto-focuses. */
+  function open(userInitiated) {
     hideBubble();
     hideLabel();
     btn.classList.remove('fyf-pulse');
-    panel.style.setProperty('display', 'flex', 'important');
-    opened = true;
+    panelOpen = true;
+    applyLayout();
     if (!msgs.children.length) {
       addMsg('Herzlich willkommen bei Lux-Floor! Ich bin Ihr KI-Bodenberater, ein digitaler Assistent. Ich finde mit Ihnen den passenden Boden, erkläre die Unterschiede und beantworte alle Ihre Fragen. Wie kann ich Ihnen helfen?', 'bot');
       renderChips(OPENING_CHIPS);
     }
-    input.focus();
+    if (userInitiated && FINE_POINTER_MQ.matches) input.focus();
   }
   function close() {
-    panel.style.setProperty('display', 'none', 'important');
+    panelOpen = false;
+    applyLayout();
     showLabel();
   }
 
-  btn.addEventListener('click', function () { userInteracted = true; opened ? close() : open(); opened = !opened; });
-  bubble.addEventListener('click', function (e) {
+  onTap(btn, function () { userInteracted = true; panelOpen ? close() : open(true); });
+  onTap(bubble, function (e) {
     if (e.target === bubbleX) return;
-    userInteracted = true; open(); opened = true;
+    userInteracted = true; open(true);
   });
-  bubbleX.addEventListener('click', function (e) { e.stopPropagation(); userInteracted = true; hideBubble(); showLabel(); });
+  onTap(bubbleX, function () { userInteracted = true; hideBubble(); showLabel(); });
+  onTap(closeBtn, function () { userInteracted = true; close(); });
+
+  /* Mobile sheet: a real tap anywhere on the page outside the widget closes the
+     sheet, and the page tap still does its normal job (soft exit, Oleg 04.08). */
+  document.addEventListener(window.PointerEvent ? 'pointerdown' : 'touchstart', function (e) {
+    if (!e.isTrusted || !panelOpen || !MOBILE_MQ.matches) return;
+    var t = e.target;
+    if (panel.contains(t) || btn.contains(t) || label.contains(t) || bubble.contains(t)) return;
+    close();
+  }, true);
 
   /* After 12s, auto-open the chat once per visit so it is actually seen. Skip if
      the visitor already opened/closed/dismissed it, or if it already fired this
-     visit (NUDGE_KEY in sessionStorage). Ilya asked for the window to open itself. */
+     visit (NUDGE_KEY in sessionStorage). Ilya asked for the window to open itself;
+     on phones it opens as the compact sheet, without keyboard (Oleg 04.08). */
   var nudgeDismissed = false;
   try { nudgeDismissed = sessionStorage.getItem(NUDGE_KEY) === '1'; } catch (e) {}
   if (!nudgeDismissed) {
     setTimeout(function () {
-      if (opened || userInteracted) return;   // respect any manual interaction
-      open(); opened = true;                   // open the panel on its own
+      if (panelOpen || userInteracted) return;  // respect any manual interaction
+      open(false);                              // auto-open: never grabs focus
       try { sessionStorage.setItem(NUDGE_KEY, '1'); } catch (e) {}  // once per visit
     }, 12000);
   }
-  closeBtn.addEventListener('click', function () { userInteracted = true; close(); opened = false; });
 
   /* ---- send ---- */
   var busy = false;
 
-  // forced = a chip value (string). A click event (non-string) means "use the input box".
+  // forced = a chip value (string). Anything else means "use the input box".
   function send(forced) {
     if (busy) return;
     var fromChip = (typeof forced === 'string');
     var text = (fromChip ? forced : input.value).trim();
     if (!text) return;
     if (!fromChip) { input.value = ''; input.style.height = 'auto'; }
+    engage();
     clearChips();
     addMsg(text, 'user');
 
@@ -323,14 +424,15 @@
       .finally(function () {
         busy = false;
         sendBtn.disabled = false;
-        input.focus();
+        if (FINE_POINTER_MQ.matches) input.focus();
       });
   }
 
-  sendBtn.addEventListener('click', send);
+  onTap(sendBtn, function () { send(); });
   input.addEventListener('keydown', function (e) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
   });
+  input.addEventListener('focus', function () { engage(); });
   input.addEventListener('input', function () {
     this.style.height = 'auto';
     this.style.height = Math.min(this.scrollHeight, 80) + 'px';
