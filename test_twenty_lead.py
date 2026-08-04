@@ -73,7 +73,7 @@ class LeadSurvivesPersonFailure(unittest.TestCase):
         self.assertIn("+39 333 1234567", opp_call["notiz"])
         self.assertIn("mario@example.it", opp_call["notiz"])
         tg = [j for u, j in calls if "api.telegram.org" in u]
-        self.assertTrue(any("BEZ kontakta" in j["text"] for j in tg))
+        self.assertTrue(any("БЕЗ карточки контакта" in j["text"] for j in tg))
 
     def test_opportunity_failure_sends_problem_alert(self):
         calls = []
@@ -91,7 +91,7 @@ class LeadSurvivesPersonFailure(unittest.TestCase):
 
         self.assertEqual(out["status"], "error")
         tg = [j for u, j in calls if "api.telegram.org" in u]
-        self.assertTrue(any("SBOJ zapisi lida" in j["text"] for j in tg))
+        self.assertTrue(any("СБОЙ записи лида" in j["text"] for j in tg))
 
 
 if __name__ == "__main__":

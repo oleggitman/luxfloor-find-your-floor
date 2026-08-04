@@ -189,8 +189,8 @@ def create_lead(data: dict, env: dict) -> dict:
             _send_telegram_alert(name, sku_str, area, data.get("stadt", ""), opp_id, env)
         if person_id is None:
             _send_problem_alert(
-                f"Lid zapisan, no BEZ kontakta (telefon/adres v zametke sdelki).\n"
-                f"Imja: {name}\nTwenty opp ID: {opp_id}\nPrichina: {person_err[:200]}", env)
+                f"Лид записан, но БЕЗ карточки контакта (телефон и адрес лежат в заметке сделки).\n"
+                f"Имя: {name}\nTwenty opp ID: {opp_id}\nПричина: {person_err[:200]}", env)
 
         return {"status": "ok", "lead_id": opp_id, "hot": hot}
 
@@ -198,9 +198,9 @@ def create_lead(data: dict, env: dict) -> dict:
         detail = getattr(e.response, "text", "")[:300] if getattr(e, "response", None) else ""
         logger.error("Twenty lead creation failed: %s %s", e, detail)
         _send_problem_alert(
-            f"SBOJ zapisi lida v Twenty! Klient poluchil otkaz.\n"
-            f"Imja: {name}\nProdukt: {sku_str}\nPloshhad: {area} m2\n"
-            f"Oshibka: {f'{e} {detail}'.strip()[:300]}", env)
+            f"СБОЙ записи лида в Twenty! Данные клиента НЕ сохранились.\n"
+            f"Имя: {name}\nПродукт: {sku_str}\nПлощадь: {area} м²\n"
+            f"Ошибка: {f'{e} {detail}'.strip()[:300]}", env)
         return {"status": "error", "reason": f"{e} {detail}".strip()}
 
 
@@ -214,7 +214,7 @@ def _send_problem_alert(text: str, env: dict):
     if not token or not chat_id:
         logger.warning("Telegram not configured, problem alert lost: %s", text[:120])
         return
-    payload: dict = {"chat_id": chat_id, "text": "PROBLEMA, Find Your Floor\n" + text}
+    payload: dict = {"chat_id": chat_id, "text": "⚠️ Проблема, Find Your Floor\n" + text}
     if thread_id:
         payload["message_thread_id"] = int(thread_id)
     try:
@@ -232,8 +232,8 @@ def _send_telegram_alert(name: str, skus: str, area, city: str, lead_id, env: di
         logger.info("Telegram not configured, skipping HOT alert for lead %s", lead_id)
         return
     text = (
-        "GORJACHIJ LID, Find Your Floor\n"
-        f"Imja: {name}\nProdukt: {skus}\nPloshhad: {area} m2\nGorod: {city}\n"
+        "🔥 Горячий лид, Find Your Floor\n"
+        f"Имя: {name}\nПродукт: {skus}\nПлощадь: {area} м²\nГород: {city}\n"
         f"Twenty opp ID: {lead_id}"
     )
     payload: dict = {"chat_id": chat_id, "text": text}

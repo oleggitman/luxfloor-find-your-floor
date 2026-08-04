@@ -464,8 +464,8 @@ def _spend_exceeded() -> bool:
         return False
     if not _spend["alerted"]:
         _spend["alerted"] = True
-        _alert_problem(f"Tagesbudget des Assistenten erreicht ({_spend['eur']:.2f} EUR). "
-                       f"Bot antwortet bis Mitternacht (UTC) mit Kontakt-Fallback.")
+        _alert_problem(f"Дневной бюджет ассистента исчерпан ({_spend['eur']:.2f} евро). "
+                       f"До полуночи (UTC) бот отвечает контактами магазина.")
     return True
 
 
@@ -594,7 +594,7 @@ def chat(req: ChatRequest, request: Request, background_tasks: BackgroundTasks):
     except Exception as e:  # noqa: BLE001
         logger.error("chat turn failed: %s", e)
         del messages[mark:]
-        _alert_problem(f"Assistent antwortet NICHT (Turn-Fehler).\nFehler: {str(e)[:250]}")
+        _alert_problem(f"Ассистент НЕ отвечает посетителям (ошибка хода).\nОшибка: {str(e)[:250]}")
         _log_turn(sid, req.message, f"(ausgefallen: {str(e)[:100]})", [], {"error": str(e)[:250]})
         return ChatResponse(reply=MODEL_DOWN_MSG, session_id=sid, options=[])
     if meta.get("lead"):
