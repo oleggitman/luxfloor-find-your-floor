@@ -91,7 +91,11 @@ class LeadSurvivesPersonFailure(unittest.TestCase):
 
         self.assertEqual(out["status"], "error")
         tg = [j for u, j in calls if "api.telegram.org" in u]
-        self.assertTrue(any("СБОЙ записи лида" in j["text"] for j in tg))
+        failure_alerts = [j["text"] for j in tg if "СБОЙ записи лида" in j["text"]]
+        self.assertTrue(failure_alerts)
+        # алерт обязан нести контакты клиента: команда связывается без CRM
+        self.assertIn("+39 333 1234567", failure_alerts[0])
+        self.assertIn("mario@example.it", failure_alerts[0])
 
 
 if __name__ == "__main__":

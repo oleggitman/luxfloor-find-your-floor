@@ -197,10 +197,22 @@ def create_lead(data: dict, env: dict) -> dict:
     except requests.RequestException as e:
         detail = getattr(e.response, "text", "")[:300] if getattr(e, "response", None) else ""
         logger.error("Twenty lead creation failed: %s %s", e, detail)
+        # Полные контакты в алерте, чтобы команда могла связаться с клиентом
+        # сразу и внести его в CRM руками (CRM в этот момент недоступна).
+        contact_bits = [f"Имя: {name}"]
+        if data.get("phone_or_whatsapp"):
+            contact_bits.append(f"Телефон/WhatsApp: {data['phone_or_whatsapp']}")
+        if data.get("email"):
+            contact_bits.append(f"Почта: {data['email']}")
+        addr = ", ".join(filter(None, [data.get("strasse"), data.get("plz"), data.get("stadt")]))
+        if addr:
+            contact_bits.append(f"Адрес: {addr}")
         _send_problem_alert(
-            f"СБОЙ записи лида в Twenty! Данные клиента НЕ сохранились.\n"
-            f"Имя: {name}\nПродукт: {sku_str}\nПлощадь: {area} м²\n"
-            f"Ошибка: {f'{e} {detail}'.strip()[:300]}", env)
+            "СБОЙ записи лида в CRM! Внесите клиента руками, все данные здесь:\n"
+            + "\n".join(contact_bits)
+            + f"\nПродукт: {sku_str}\nПлощадь: {area} м²"
+            + (f"\nЗапрос: {data.get('conversation_summary', '')[:200]}" if data.get('conversation_summary') else "")
+            + f"\nОшибка: {f'{e} {detail}'.strip()[:200]}", env)
         return {"status": "error", "reason": f"{e} {detail}".strip()}
 
 
