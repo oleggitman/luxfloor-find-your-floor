@@ -23,6 +23,19 @@ import requests
 ENV_PATH = Path(__file__).parent / ".env"
 
 # --- live-catalog facts (verified 2026-06-12) -------------------------------
+# Source tag on every link the assistant hands out. With WooCommerce Order
+# Attribution enabled in the shop, orders that started from these links show
+# "ki-bodenberater" as their source: the proof that the assistant sold.
+SHOP_BASE = "https://lux-floor.de"
+UTM_TAG = "utm_source=ki-bodenberater&utm_medium=chat"
+
+
+def _tag_url(url):
+    if not url:
+        return url
+    return url + ("&" if "?" in url else "?") + UTM_TAG
+
+
 OWN_BRAND_VALUE = "LUX"            # attribute "Hersteller" value marking Eigenmarke
 ATTR_HERSTELLER = "Hersteller"
 ATTR_OBERFLAECHE = "Oberfläche"     # Hochglanz / Matt / Strukturiert  -> surface
@@ -342,7 +355,11 @@ class WooClient:
             "optik": attr_value(p, ATTR_OPTIK),
             "format": attr_value(p, ATTR_FORMAT),
             "farbe": attr_value(p, ATTR_FARBE),
-            "url": p.get("permalink"),
+            "url": _tag_url(p.get("permalink")),
+            # One-tap "in den Warenkorb" for ready buyers; the assistant appends
+            # &quantity=N once the package count is known. Source-tagged so Woo
+            # Order Attribution (once enabled) credits the assistant on the order.
+            "cart_url": f"{SHOP_BASE}/?add-to-cart={p.get('id')}&{UTM_TAG}" if p.get("id") else None,
             "weight_kg_per_ve": de_num(p.get("weight")),
             "sqm_per_ve": spv,
         }
@@ -461,7 +478,7 @@ class WooClient:
             "price_eur": round(price, 2) if price else None,   # per piece as in Woo
             "hersteller": attr_value(p, ATTR_HERSTELLER) or "",
             "image_url": img,
-            "url": p.get("permalink"),
+            "url": _tag_url(p.get("permalink")),
         }
 
     def find_matching_trim(self, *, floor_query: str, limit: int = 3) -> dict:

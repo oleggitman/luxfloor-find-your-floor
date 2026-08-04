@@ -24,6 +24,7 @@ import uuid
 from collections import deque
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 import anthropic
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
@@ -31,7 +32,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from twenty_client import create_lead
+from twenty_client import create_lead, _send_problem_alert
 from distill import _read_log, _scrub, run_distill
 from woo_client import WooClient, dispatch as woo_dispatch
 
@@ -286,6 +287,28 @@ def _prune_sessions():
         del sessions[sid]
 
 
+def _rebuild_history(sid: str) -> list:
+    """H3 (audit 2026-08-04): sessions live in process memory, so every deploy or
+    Render restart made the bot an amnesiac mid-conversation. If a session id we
+    do not know shows up, rebuild the dialogue from the durable turn log. Contacts
+    there are masked at write time; losing them from context is acceptable."""
+    out: list = []
+    try:
+        for rec in _read_recent(400):
+            if rec.get("session_id") != sid:
+                continue
+            u, a = rec.get("user"), rec.get("assistant")
+            if u and a:
+                out.append({"role": "user", "content": u})
+                out.append({"role": "assistant", "content": a})
+    except Exception as e:  # noqa: BLE001
+        logger.warning("history rebuild failed for %s: %s", sid, e)
+        return []
+    if out:
+        logger.info("history rebuilt for %s: %d turns", sid, len(out) // 2)
+    return out[-40:]
+
+
 def _dispatch_tool(name: str, args: dict) -> dict:
     if name in ("search_products", "estimate_shipping", "lookup_product",
                 "find_matching_trim"):
@@ -341,6 +364,10 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     session_id: Optional[str] = None
     message: str
+    # Shop page the widget is embedded on when the visitor sends the message.
+    # Travels to the model as a "[Seite: <URL>]" hint line (see system-prompt.md,
+    # "Where the visitor is on the site"). Optional: old widget versions omit it.
+    page_url: Optional[str] = None
 
 
 class ChatResponse(BaseModel):
@@ -380,6 +407,66 @@ RATE_LIMIT_MSG = (
     "direkt: Telefon 02131 2917676, WhatsApp +49 179 403 33 81 oder "
     "info@lux-floor.de. Wir helfen Ihnen gerne weiter."
 )
+
+
+# H1 (audit 2026-08-04): the model being down must never be silent. The visitor
+# gets an honest German message with real contacts instead of a generic error,
+# their message still lands in the log, and Telegram gets one alert per hour.
+MODEL_DOWN_MSG = (
+    "Entschuldigung, ich bin im Moment nicht erreichbar. Sie erreichen unser "
+    "Team direkt: Telefon 02131 2917676, WhatsApp +49 179 403 33 81 oder "
+    "info@lux-floor.de. Wir helfen Ihnen gerne weiter."
+)
+_last_problem_alert = {"ts": 0.0}
+
+
+def _alert_problem(text: str) -> None:
+    now = time.time()
+    if now - _last_problem_alert["ts"] < 3600:
+        return
+    _last_problem_alert["ts"] = now
+    try:
+        _send_problem_alert(text, ENV)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("problem alert failed: %s", e)
+
+
+# H6 (audit 2026-08-04): DAILY_SPEND_CEILING_EUR existed only as an env var, no
+# code ever read it. Now it is a real ceiling: rough EUR cost accumulated from
+# the model's own usage numbers per calendar day (UTC); above the ceiling the
+# bot answers with the honest contact fallback instead of burning further.
+SPEND_CEILING_EUR = float(ENV.get("DAILY_SPEND_CEILING_EUR", "15"))
+_COST_IN_PER_MTOK = 3.0    # USD per 1M input tokens (Sonnet class), EUR≈USD is
+_COST_OUT_PER_MTOK = 15.0  # close enough for a protective ceiling
+_spend = {"day": None, "eur": 0.0, "alerted": False}
+
+
+def _spend_day_roll() -> None:
+    today = time.strftime("%Y-%m-%d", time.gmtime())
+    if _spend["day"] != today:
+        _spend["day"] = today
+        _spend["eur"] = 0.0
+        _spend["alerted"] = False
+
+
+def _spend_add(usage) -> None:
+    _spend_day_roll()
+    try:
+        _spend["eur"] += (usage.input_tokens * _COST_IN_PER_MTOK
+                          + usage.output_tokens * _COST_OUT_PER_MTOK) / 1_000_000
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _spend_exceeded() -> bool:
+    _spend_day_roll()
+    if _spend["eur"] < SPEND_CEILING_EUR:
+        return False
+    if not _spend["alerted"]:
+        _spend["alerted"] = True
+        _alert_problem(f"Tagesbudget des Assistenten erreicht ({_spend['eur']:.2f} EUR). "
+                       f"Bot antwortet bis Mitternacht (UTC) mit Kontakt-Fallback.")
+    return True
 
 
 def _rate_limited(ip: str) -> bool:
@@ -453,32 +540,65 @@ def chat(req: ChatRequest, request: Request, background_tasks: BackgroundTasks):
     if _rate_limited(ip):
         sid = req.session_id or str(uuid.uuid4())
         return ChatResponse(reply=RATE_LIMIT_MSG, session_id=sid)
+    if _spend_exceeded():
+        sid = req.session_id or str(uuid.uuid4())
+        _log_turn(sid, req.message, "(Tagesbudget erreicht, Kontakt-Fallback)", [], {"spend_cap": True})
+        return ChatResponse(reply=RATE_LIMIT_MSG, session_id=sid)
 
     _prune_sessions()
 
     sid = req.session_id or str(uuid.uuid4())
     if sid not in sessions:
-        sessions[sid] = {"messages": [], "last_active": time.time()}
+        sessions[sid] = {"messages": _rebuild_history(sid) if req.session_id else [],
+                         "last_active": time.time()}
     session = sessions[sid]
     session["last_active"] = time.time()
 
     messages = session["messages"]
-    messages.append({"role": "user", "content": req.message})
+    content = req.message
+    page = (req.page_url or "").strip()
+    # Only same-shop http(s) URLs, capped: the field arrives from the browser
+    # and must not become a prompt-injection or junk channel.
+    if page.startswith(("http://", "https://")) and len(page) <= 300:
+        host = urlparse(page).netloc.lower()
+        if host == "lux-floor.de" or host.endswith(".lux-floor.de"):
+            content = f"[Seite: {page}]\n{content}"
+    messages.append({"role": "user", "content": content})
 
     mark = len(messages)
-    reply_raw, meta = _run_turn(messages)
-    guarded = False
-    for _ in range(2):  # guard: no price in a turn that showed no product/shipping
-        if not _needs_price_guard(reply_raw, meta):
-            break
-        guarded = True
-        base = messages[:mark]  # up to and including the user's message
-        reply_raw, meta2 = _run_turn(base + [{"role": "user", "content": _NO_PRICE_CORRECTION}])
-        meta = {"tools": meta.get("tools", []) + meta2.get("tools", []),
-                "lead": meta2.get("lead") or meta.get("lead"), "price_guard": True}
-    if guarded:  # replace the leaking draft with the clean reply, keep history natural
+    # H1: any model/tool failure gives the visitor real contacts, not a naked 500,
+    # gets logged like a normal turn, and alerts Telegram (throttled hourly).
+    try:
+        reply_raw, meta = _run_turn(messages)
+        guarded = False
+        for _ in range(2):  # guard: no price in a turn that showed no product/shipping
+            if not _needs_price_guard(reply_raw, meta):
+                break
+            guarded = True
+            base = messages[:mark]  # up to and including the user's message
+            reply_raw, meta2 = _run_turn(base + [{"role": "user", "content": _NO_PRICE_CORRECTION}])
+            meta = {"tools": meta.get("tools", []) + meta2.get("tools", []),
+                    "lead": meta2.get("lead") or meta.get("lead"), "price_guard": True}
+        # H4 guard: a promised handoff without a real lead is a lie to the visitor.
+        for _ in range(2):
+            if not _needs_handoff_guard(reply_raw, meta, session):
+                break
+            guarded = True
+            base = messages[:mark]
+            reply_raw, meta2 = _run_turn(base + [{"role": "user", "content": _NO_HANDOFF_CORRECTION}])
+            meta = {"tools": meta.get("tools", []) + meta2.get("tools", []),
+                    "lead": meta2.get("lead") or meta.get("lead"), "handoff_guard": True}
+        if guarded:  # replace the leaking draft with the clean reply, keep history natural
+            del messages[mark:]
+            messages.append({"role": "assistant", "content": reply_raw})
+    except Exception as e:  # noqa: BLE001
+        logger.error("chat turn failed: %s", e)
         del messages[mark:]
-        messages.append({"role": "assistant", "content": reply_raw})
+        _alert_problem(f"Assistent antwortet NICHT (Turn-Fehler).\nFehler: {str(e)[:250]}")
+        _log_turn(sid, req.message, f"(ausgefallen: {str(e)[:100]})", [], {"error": str(e)[:250]})
+        return ChatResponse(reply=MODEL_DOWN_MSG, session_id=sid, options=[])
+    if meta.get("lead"):
+        session["lead_done"] = True
     session["last_active"] = time.time()
 
     reply, options = _extract_chips(reply_raw)
@@ -505,6 +625,35 @@ _NO_PRICE_CORRECTION = (
 )
 
 
+# H4 (audit 2026-08-04, card 68): the model told a visitor "ich leite das an unser
+# Team weiter" while create_lead never ran, so nothing reached anyone. Deterministic
+# guard like the price one: an active forwarding claim in a turn without a lead
+# (this turn or earlier in the session) forces a regeneration.
+_HANDOFF_RE = re.compile(
+    r"leite\s.{0,40}weiter|weitergeleitet|an unser Team (?:weitergegeben|gemeldet)|"
+    r"Team (?:meldet sich|wird sich .{0,20}melden|kontaktiert Sie)|"
+    r"habe .{0,30}(?:vermerkt|notiert|aufgenommen)|Anfrage .{0,20}vorgemerkt",
+    re.IGNORECASE,
+)
+_NO_HANDOFF_CORRECTION = (
+    "[System-Korrektur] Du hast dem Kunden gesagt oder nahegelegt, dass seine Anfrage "
+    "an das Team weitergeleitet oder vermerkt wird, aber es wurde KEIN Lead angelegt: "
+    "das Team erfaehrt davon NICHTS. Antworte neu, ohne falsche Weiterleitung: entweder "
+    "biete konkret an, die Anfrage jetzt zu speichern (frage nach Name + Telefon/WhatsApp "
+    "oder E-Mail + Einverstaendnis, dann create_lead), oder hilf ohne ein solches "
+    "Versprechen weiter (z.B. direkte Kontakte nennen: 02131 2917676, info@lux-floor.de). "
+    "Gib nur die neue Antwort aus."
+)
+
+
+def _needs_handoff_guard(reply: str, meta: dict, session: dict) -> bool:
+    if session.get("lead_done") or meta.get("lead"):
+        return False
+    if "create_lead" in meta.get("tools", []):
+        return False
+    return bool(_HANDOFF_RE.search(reply or ""))
+
+
 def _needs_price_guard(reply: str, meta: dict) -> bool:
     """A price belongs only in a turn that actually presented a product or computed
     shipping. If none of those tools ran this turn but the reply still names a price
@@ -518,7 +667,9 @@ def _needs_price_guard(reply: str, meta: dict) -> bool:
 def _run_turn(messages: list) -> tuple[str, dict]:
     used_tools: list = []
     lead = None
-    while True:
+    # H7: hard cap on the inner tool loop (was `while True`); H6: every model call
+    # feeds the daily spend counter.
+    for _hop in range(8):
         resp = ai.messages.create(
             model=MODEL,
             max_tokens=1200,
@@ -526,6 +677,7 @@ def _run_turn(messages: list) -> tuple[str, dict]:
             tools=TOOLS,
             messages=messages,
         )
+        _spend_add(getattr(resp, "usage", None))
         messages.append({"role": "assistant", "content": resp.content})
 
         if resp.stop_reason != "tool_use":
@@ -552,3 +704,6 @@ def _run_turn(messages: list) -> tuple[str, dict]:
                 "content": json.dumps(result, ensure_ascii=False),
             })
         messages.append({"role": "user", "content": tool_results})
+
+    logger.warning("tool loop cap reached (8 hops), honest fallback")
+    return MODEL_DOWN_MSG, {"tools": used_tools, "lead": lead, "loop_cap": True}

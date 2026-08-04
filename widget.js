@@ -400,7 +400,8 @@
       typing.innerHTML = 'Einen Moment bitte…';
     }, 5000);
 
-    var body = JSON.stringify({ session_id: sessionId, message: text });
+    var body = JSON.stringify({ session_id: sessionId, message: text,
+      page_url: String(location.href).slice(0, 300) });
 
     fetch(BACKEND + '/chat', {
       method: 'POST',

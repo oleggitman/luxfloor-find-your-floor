@@ -236,9 +236,16 @@ def run_distill(
         if now - last_ts < settle_secs:
             continue  # still active, wait
         card = distill_conversation(turns, client, model)
-        marker[sid] = last_ts  # mark even on None, so we don't retry a bad convo forever
         if not card:
+            # H2 (audit 2026-08-04): marking a FAILED distillation as done meant a
+            # transient LLM error (no credits, 429) erased the conversation from
+            # analytics forever once the raw purged. Now: keep retrying hourly and
+            # give up only when the raw is about to purge anyway (<6h left).
+            if now - last_ts > retain_secs - 6 * 3600.0:
+                marker[sid] = last_ts
+                logger.warning("distill giving up on %s (raw about to purge)", sid)
             continue
+        marker[sid] = last_ts
         ts_list = sorted(t.get("ts", "") for t in turns if t.get("ts"))
         lead_turn = next((t for t in turns if t.get("lead")), None)
         card.update({
