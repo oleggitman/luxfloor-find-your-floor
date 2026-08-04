@@ -65,6 +65,17 @@ def _split_name(full: str) -> dict:
     return {"firstName": parts[0], "lastName": parts[1] if len(parts) > 1 else ""}
 
 
+def _phone_field(phone: str) -> dict:
+    """Any phone must be written, never rejected. Numbers with an explicit +XX
+    keep it and Twenty infers the country itself (verified live: +39 -> IT);
+    forcing DE next to a foreign +XX made Twenty 400 the whole person, which
+    lost the Italy lead on 2026-07-31. Bare numbers default to DE (shop's home)."""
+    phone = (phone or "").strip()
+    if phone.startswith("+"):
+        return {"primaryPhoneNumber": phone}
+    return {"primaryPhoneNumber": phone, "primaryPhoneCountryCode": "DE"}
+
+
 def _create_person(base: str, headers: dict, data: dict) -> str | None:
     body: dict = {"name": _split_name(data.get("name", "Unbekannt"))}
     email = data.get("email")
@@ -72,7 +83,7 @@ def _create_person(base: str, headers: dict, data: dict) -> str | None:
         body["emails"] = {"primaryEmail": email}
     phone = data.get("phone_or_whatsapp")
     if phone:
-        body["phones"] = {"primaryPhoneNumber": phone, "primaryPhoneCountryCode": "DE"}
+        body["phones"] = _phone_field(phone)
     if data.get("stadt"):
         body["stadt"] = data["stadt"]
     if data.get("plz"):
@@ -110,9 +121,19 @@ def create_lead(data: dict, env: dict) -> dict:
     if skus:
         title += f", {skus[0]}"
 
+    # The opportunity is the lead and is written ALWAYS. A person/contact
+    # failure (bad phone format, API hiccup) must never take the deal down
+    # with it: the contact then travels as plain text in the note instead.
+    person_id = None
+    person_err = ""
     try:
         person_id = _create_person(base, headers, data)
+    except requests.RequestException as e:
+        detail = getattr(e.response, "text", "")[:300] if getattr(e, "response", None) else ""
+        person_err = f"{e} {detail}".strip()
+        logger.error("Twenty person creation failed, writing contact into note: %s", person_err)
 
+    try:
         opp: dict = {
             "name": title,
             "stage": NEW_LEAD_STAGE,
@@ -140,6 +161,19 @@ def create_lead(data: dict, env: dict) -> dict:
             opp["profil"] = json.dumps(profile, ensure_ascii=False)
         if data.get("info_note"):
             opp["notiz"] = opp["notiz"] + f"\n{data['info_note']}"
+        if person_id is None:
+            contact_lines = ["", "!! KONTAKT (Person-Anlage fehlgeschlagen, Daten hier):",
+                             f"Name: {name}"]
+            if data.get("phone_or_whatsapp"):
+                contact_lines.append(f"Telefon/WhatsApp: {data['phone_or_whatsapp']}")
+            if data.get("email"):
+                contact_lines.append(f"E-Mail: {data['email']}")
+            addr = ", ".join(filter(None, [data.get("strasse"), data.get("plz"), data.get("stadt")]))
+            if addr:
+                contact_lines.append(f"Adresse: {addr}")
+            if person_err:
+                contact_lines.append(f"(Fehler: {person_err[:160]})")
+            opp["notiz"] = opp["notiz"] + "\n".join(contact_lines)
 
         est = data.get("budget_eur_per_sqm")
         if est and area:
@@ -153,13 +187,41 @@ def create_lead(data: dict, env: dict) -> dict:
 
         if hot:
             _send_telegram_alert(name, sku_str, area, data.get("stadt", ""), opp_id, env)
+        if person_id is None:
+            _send_problem_alert(
+                f"Lid zapisan, no BEZ kontakta (telefon/adres v zametke sdelki).\n"
+                f"Imja: {name}\nTwenty opp ID: {opp_id}\nPrichina: {person_err[:200]}", env)
 
         return {"status": "ok", "lead_id": opp_id, "hot": hot}
 
     except requests.RequestException as e:
         detail = getattr(e.response, "text", "")[:300] if getattr(e, "response", None) else ""
         logger.error("Twenty lead creation failed: %s %s", e, detail)
+        _send_problem_alert(
+            f"SBOJ zapisi lida v Twenty! Klient poluchil otkaz.\n"
+            f"Imja: {name}\nProdukt: {sku_str}\nPloshhad: {area} m2\n"
+            f"Oshibka: {f'{e} {detail}'.strip()[:300]}", env)
         return {"status": "error", "reason": f"{e} {detail}".strip()}
+
+
+def _send_problem_alert(text: str, env: dict):
+    """Any create_lead failure alerts the same Telegram chat as HOT leads.
+    Before 2026-08-04 failures only went to the server log and the Italy lead
+    (63 m2, 31.07) died silently; this must never be silent again. Non-blocking."""
+    token = env.get("TELEGRAM_BOT_TOKEN", "")
+    chat_id = env.get("TELEGRAM_CHAT_ID", "")
+    thread_id = env.get("TELEGRAM_HOT_THREAD_ID", "")
+    if not token or not chat_id:
+        logger.warning("Telegram not configured, problem alert lost: %s", text[:120])
+        return
+    payload: dict = {"chat_id": chat_id, "text": "PROBLEMA, Find Your Floor\n" + text}
+    if thread_id:
+        payload["message_thread_id"] = int(thread_id)
+    try:
+        requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json=payload, timeout=10)
+        logger.info("Telegram problem alert sent")
+    except Exception as e:
+        logger.warning("Telegram problem alert failed (non-blocking): %s", e)
 
 
 def _send_telegram_alert(name: str, skus: str, area, city: str, lead_id, env: dict):
