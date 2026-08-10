@@ -76,7 +76,7 @@ def _phone_field(phone: str) -> dict:
     return {"primaryPhoneNumber": phone, "primaryPhoneCountryCode": "DE"}
 
 
-def _create_person(base: str, headers: dict, data: dict) -> str | None:
+def _person_body(data: dict) -> dict:
     body: dict = {"name": _split_name(data.get("name", "Unbekannt"))}
     email = data.get("email")
     if email:
@@ -84,13 +84,83 @@ def _create_person(base: str, headers: dict, data: dict) -> str | None:
     phone = data.get("phone_or_whatsapp")
     if phone:
         body["phones"] = _phone_field(phone)
-    if data.get("stadt"):
-        body["stadt"] = data["stadt"]
-    if data.get("plz"):
-        body["plz"] = data["plz"]
-    if data.get("strasse"):
-        body["strasse"] = data["strasse"]
-    r = requests.post(f"{base}/rest/people", json=body, headers=headers, timeout=15)
+    for field in ("stadt", "plz", "strasse"):
+        if data.get(field):
+            body[field] = data[field]
+    return body
+
+
+def _find_person_by_email(base: str, headers: dict, email: str) -> str | None:
+    """Ищет существующую карточку РОВНО по адресу почты.
+
+    Проверено живыми запросами к их Twenty 10.08.2026 (лид Jost Dolinsek):
+      - вторая карточка с той же почтой отклоняется, 400 «A duplicate entry
+        was detected», именно на этом сломался лид;
+      - полный тёзка с другой почтой создаётся спокойно (201);
+      - тот же телефон при другой почте тоже создаётся (201);
+      - встроенный сопоставитель дублей Twenty ищет ПО ИМЕНИ и на «Thomas Simon»
+        отдаёт чужого человека, поэтому источником id он быть не может.
+    Отсюда правило: связываем только по почте, ни по имени, ни по телефону.
+    Почта сверяется без учёта регистра (фильтр `ilike`), и найденная запись
+    перепроверяется на точное совпадение, чтобы служебные символы шаблона не
+    подтянули чужой адрес."""
+    email = (email or "").strip()
+    if not email:
+        return None
+    try:
+        r = requests.get(f"{base}/rest/people", params={"filter": f"emails.primaryEmail[ilike]:{email}"},
+                         headers=headers, timeout=15)
+        if not r.ok:
+            return None
+        for p in (r.json().get("data") or {}).get("people") or []:
+            found = ((p.get("emails") or {}).get("primaryEmail") or "").strip()
+            if found.lower() == email.lower():
+                return p.get("id")
+    except Exception as e:  # поиск никогда не роняет запись лида
+        logger.warning("person lookup by email failed: %s", e)
+    return None
+
+
+def _enrich_person(base: str, headers: dict, person_id: str, data: dict) -> None:
+    """Дозаполняет ПУСТЫЕ поля найденной карточки тем, что принёс разговор.
+    Ничего уже заполненного не перезаписывает: данные команды главнее наших."""
+    try:
+        r = requests.get(f"{base}/rest/people/{person_id}", headers=headers, timeout=15)
+        if not r.ok:
+            return
+        cur = (r.json().get("data") or {}).get("person") or {}
+        patch: dict = {}
+        if data.get("email") and not (cur.get("emails") or {}).get("primaryEmail"):
+            patch["emails"] = {"primaryEmail": data["email"]}
+        if data.get("phone_or_whatsapp") and not (cur.get("phones") or {}).get("primaryPhoneNumber"):
+            patch["phones"] = _phone_field(data["phone_or_whatsapp"])
+        for field in ("stadt", "plz", "strasse"):
+            if data.get(field) and not cur.get(field):
+                patch[field] = data[field]
+        if patch:
+            requests.patch(f"{base}/rest/people/{person_id}", json=patch, headers=headers, timeout=15)
+            logger.info("Existing person %s enriched: %s", person_id, ", ".join(patch))
+    except Exception as e:  # дозаполнение необязательное, лид важнее
+        logger.warning("person enrich failed: %s", e)
+
+
+def _create_person(base: str, headers: dict, data: dict) -> str | None:
+    email = data.get("email")
+    existing = _find_person_by_email(base, headers, email) if email else None
+    if existing:
+        logger.info("Existing person reused id=%s", existing)
+        _enrich_person(base, headers, existing, data)
+        return existing
+    r = requests.post(f"{base}/rest/people", json=_person_body(data), headers=headers, timeout=15)
+    if r.status_code == 400 and "duplicate" in (r.text or "").lower():
+        # Гонка: карточку завели между поиском и записью. Ищем ещё раз.
+        existing = _find_person_by_email(base, headers, email) if email else None
+        logger.info("Duplicate on create, resolved to existing id=%s", existing)
+        if existing:
+            _enrich_person(base, headers, existing, data)
+            return existing
+        # Не нашли: сделка всё равно пишется, контакты уезжают в заметку и алерт.
+        r.raise_for_status()
     r.raise_for_status()
     return (r.json().get("data", {}).get("createPerson") or {}).get("id")
 
@@ -188,9 +258,20 @@ def create_lead(data: dict, env: dict) -> dict:
         if hot:
             _send_telegram_alert(name, sku_str, area, data.get("stadt", ""), opp_id, env)
         if person_id is None:
+            # Алерт обязан нести сами контакты: команда связывается с клиентом
+            # из сообщения, не открывая CRM и не спрашивая никого (10.08.2026).
+            bits = [f"Имя: {name}"]
+            if data.get("phone_or_whatsapp"):
+                bits.append(f"Телефон/WhatsApp: {data['phone_or_whatsapp']}")
+            if data.get("email"):
+                bits.append(f"Почта: {data['email']}")
+            addr = ", ".join(filter(None, [data.get("strasse"), data.get("plz"), data.get("stadt")]))
+            if addr:
+                bits.append(f"Адрес: {addr}")
             _send_problem_alert(
-                f"Лид записан, но БЕЗ карточки контакта (телефон и адрес лежат в заметке сделки).\n"
-                f"Имя: {name}\nTwenty opp ID: {opp_id}\nПричина: {person_err[:200]}", env)
+                "Лид записан, но БЕЗ карточки контакта (контакты в заметке сделки и здесь).\n"
+                + "\n".join(bits)
+                + f"\nTwenty opp ID: {opp_id}\nПричина: {person_err[:200]}", env)
 
         return {"status": "ok", "lead_id": opp_id, "hot": hot}
 
