@@ -28,6 +28,16 @@ def main():
     ok &= _check("dedupes and drops blanks", opts == ["Vinyl", "Laminat"])
     ok &= _check("marker stripped on dedupe case", "[[CHIPS" not in clean)
 
+    # 16.08: в проде модель заворачивает маркер в бэктики, после вырезания
+    # маркера покупателю оставался хвост «``» (сессии 15.08, трижды).
+    clean, opts = _extract_chips("Grau, sehr zeitlos! Und welcher Raum?\n`[[CHIPS: Küche | Bad | Flur]]`")
+    ok &= _check("inline-code marker: options parsed", opts == ["Küche", "Bad", "Flur"])
+    ok &= _check("inline-code marker: no backtick residue", "`" not in clean)
+
+    clean, opts = _extract_chips("Frage?\n```\n[[CHIPS: Hell | Dunkel]]\n```")
+    ok &= _check("fenced marker: options parsed", opts == ["Hell", "Dunkel"])
+    ok &= _check("fenced marker: no backtick residue", "`" not in clean)
+
     print("ALL OK" if ok else "FAILURES")
     raise SystemExit(0 if ok else 1)
 

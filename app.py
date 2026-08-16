@@ -379,7 +379,11 @@ class ChatResponse(BaseModel):
 # Quick-reply chips: the model may append one [[CHIPS: a | b | c]] marker to its
 # reply. We strip it from the visible text and return the options to the widget,
 # which renders them as tappable buttons. No marker -> no chips (graceful).
-CHIPS_RE = re.compile(r"\[\[\s*CHIPS\s*:\s*(.*?)\]\]", re.IGNORECASE | re.DOTALL)
+# The model sometimes wraps the marker in backticks or a code fence; those
+# backticks belong to the marker and must be swallowed with it, otherwise the
+# customer sees a stray "``" tail (production, 2026-08-15).
+CHIPS_RE = re.compile(r"`{0,3}\s*\[\[\s*CHIPS\s*:\s*(.*?)\]\]\s*`{0,3}",
+                      re.IGNORECASE | re.DOTALL)
 
 
 def _extract_chips(reply: str) -> tuple[str, list[str]]:
