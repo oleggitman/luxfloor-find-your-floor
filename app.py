@@ -673,25 +673,30 @@ def _needs_handoff_guard(reply: str, meta: dict, session: dict) -> bool:
 
 
 # Sample-chip guard (log review 2026-09-02, cards 87/93, raw session 31.08 07:10):
-# the "Kostenloses Muster bestellen" chip failed two ways in production. Fresh press:
-# the model ran its consultation habit (four questions before any product), violating
-# the prompt's one-question rule from 04.08. Repeat press after products were shown:
-# the model picked a product the visitor never chose ("Schöne Wahl!"). The chip text
-# is deterministic input, so both live here as a guard like price/handoff, not as
-# another prompt instruction.
+# the "Kostenloses Muster bestellen" chip failed two ways in production. After a
+# press the model ran its consultation habit (four questions before any product),
+# violating the prompt's one-question rule from 04.08. And a repeat press after
+# products were shown made the model pick a product the visitor never chose
+# ("Schöne Wahl!"). The chip text is deterministic input, so both live here as a
+# guard like price/handoff, not as another prompt instruction. The spec allows ONE
+# narrowing question after the press; the guard fires on the SECOND product-less
+# assistant turn since the press (the chain), and on the self-pick.
 _SAMPLE_CHIP = "kostenloses muster bestellen"
 _PRODUCT_TOOLS = {"search_products", "lookup_product"}
 _PRODUCT_LINK_RE = re.compile(r"\]\(https://(?:www\.)?lux-floor\.de", re.IGNORECASE)
+_SAMPLE_CHAIN_CAP = 4  # give up far from the press: the visitor has moved on
 _SAMPLE_CORRECTION = (
-    "[System-Korrektur] Der Kunde hat den Chip 'Kostenloses Muster bestellen' "
-    "gedrückt. Antworte neu und halte dich strikt daran: Hat der Kunde selbst schon "
-    "ein Produkt gewählt oder klar benannt (auch über die Produktseite, auf der er "
+    "[System-Korrektur] Der Kunde will ein kostenloses Muster (Chip 'Kostenloses "
+    "Muster bestellen'), und die eine erlaubte Rückfrage ist verbraucht: KEINE "
+    "weitere Frage vor dem Produkt. Antworte neu: Hat der Kunde selbst schon ein "
+    "Produkt gewählt oder klar benannt (auch über die Produktseite, auf der er "
     "steht), biete das Muster GENAU dafür an und beginne die Datenaufnahme. Wurden "
-    "in diesem Gespräch schon Produkte gezeigt, ohne dass der Kunde eines gewählt "
-    "hat, frage mit Chips, für WELCHES davon das Muster sein soll; wähle NIEMALS "
-    "selbst eines aus. Wurde noch nichts gezeigt, rufe search_products auf und zeige "
-    "SOFORT 2-3 passende Böden (Bild + eine Zeile + Chips mit den Produktnamen); "
-    "höchstens EINE kurze Rückfrage, keine Fragekette. Gib nur die neue Antwort aus."
+    "schon Produkte gezeigt, frage mit Chips, für WELCHES davon das Muster sein "
+    "soll; wähle NIEMALS selbst eines aus. Sonst rufe search_products mit dem auf, "
+    "was du schon weißt, und zeige SOFORT 2-3 passende Böden (Bild + eine Zeile + "
+    "Chips mit den Produktnamen). Verfolgt der Kunde gerade sichtbar ein anderes "
+    "Anliegen (z.B. eine Servicefrage), beantworte erst dieses und biete das Muster "
+    "danach in einem Satz an. Gib nur die neue Antwort aus."
 )
 
 
@@ -719,16 +724,36 @@ def _products_shown(history: list) -> bool:
                for m in history)
 
 
-def _needs_sample_guard(user_msg: str, meta: dict, history: list) -> bool:
-    if (user_msg or "").strip().lower() != _SAMPLE_CHIP:
-        return False
-    ran_product_tool = any(t in _PRODUCT_TOOLS for t in meta.get("tools", []))
-    shown = _products_shown(history)
-    if not shown and not ran_product_tool:
-        return True   # nothing on the table and none fetched: the question chain
-    if shown and ran_product_tool:
-        return True   # products already on the table: never self-pick a new one
+def _sample_question_spent(history: list) -> bool:
+    """Walking back from the end: is there a recent sample-chip press with no
+    products shown since, whose one allowed narrowing question is already used?
+    Tool-result user messages (list content) are skipped; a product link on any
+    assistant turn since the press ends the pending state."""
+    asst_since = 0
+    for m in reversed(history):
+        content = m.get("content")
+        if m.get("role") == "assistant":
+            if _PRODUCT_LINK_RE.search(_assistant_text(content)):
+                return False
+            asst_since += 1
+            if asst_since > _SAMPLE_CHAIN_CAP:
+                return False
+        elif m.get("role") == "user" and isinstance(content, str):
+            text = content.split("\n", 1)[-1] if content.startswith("[Seite:") else content
+            if text.strip().lower() == _SAMPLE_CHIP:
+                return asst_since >= 1
     return False
+
+
+def _needs_sample_guard(user_msg: str, meta: dict, history: list) -> bool:
+    ran_product_tool = any(t in _PRODUCT_TOOLS for t in meta.get("tools", []))
+    if (user_msg or "").strip().lower() == _SAMPLE_CHIP:
+        # self-pick: products already on the table and the model fetches a new one
+        return _products_shown(history) and ran_product_tool
+    if ran_product_tool:
+        return False
+    # the chain: chip pressed recently, the one allowed question spent, still no products
+    return _sample_question_spent(history)
 
 
 def _needs_price_guard(reply: str, meta: dict) -> bool:
