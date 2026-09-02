@@ -592,6 +592,20 @@ def chat(req: ChatRequest, request: Request, background_tasks: BackgroundTasks):
             reply_raw, meta2 = _run_turn(base + [{"role": "user", "content": _NO_HANDOFF_CORRECTION}])
             meta = {"tools": meta.get("tools", []) + meta2.get("tools", []),
                     "lead": meta2.get("lead") or meta.get("lead"), "handoff_guard": True}
+        # Sample-chip guard: history BEFORE this turn (messages[:mark] holds no
+        # assistant reply yet), so "products shown" means shown in earlier turns.
+        # The re-check judges only the LATEST run's tools, not the merged list,
+        # otherwise a corrected reply would be re-judged by the draft's tool calls.
+        sample_tools = meta.get("tools", [])
+        for _ in range(2):
+            if not _needs_sample_guard(req.message, {"tools": sample_tools}, messages[:mark]):
+                break
+            guarded = True
+            base = messages[:mark]
+            reply_raw, meta2 = _run_turn(base + [{"role": "user", "content": _SAMPLE_CORRECTION}])
+            sample_tools = meta2.get("tools", [])
+            meta = {"tools": meta.get("tools", []) + sample_tools,
+                    "lead": meta2.get("lead") or meta.get("lead"), "sample_guard": True}
         if guarded:  # replace the leaking draft with the clean reply, keep history natural
             del messages[mark:]
             messages.append({"role": "assistant", "content": reply_raw})
@@ -656,6 +670,65 @@ def _needs_handoff_guard(reply: str, meta: dict, session: dict) -> bool:
     if "create_lead" in meta.get("tools", []):
         return False
     return bool(_HANDOFF_RE.search(reply or ""))
+
+
+# Sample-chip guard (log review 2026-09-02, cards 87/93, raw session 31.08 07:10):
+# the "Kostenloses Muster bestellen" chip failed two ways in production. Fresh press:
+# the model ran its consultation habit (four questions before any product), violating
+# the prompt's one-question rule from 04.08. Repeat press after products were shown:
+# the model picked a product the visitor never chose ("Schöne Wahl!"). The chip text
+# is deterministic input, so both live here as a guard like price/handoff, not as
+# another prompt instruction.
+_SAMPLE_CHIP = "kostenloses muster bestellen"
+_PRODUCT_TOOLS = {"search_products", "lookup_product"}
+_PRODUCT_LINK_RE = re.compile(r"\]\(https://(?:www\.)?lux-floor\.de", re.IGNORECASE)
+_SAMPLE_CORRECTION = (
+    "[System-Korrektur] Der Kunde hat den Chip 'Kostenloses Muster bestellen' "
+    "gedrückt. Antworte neu und halte dich strikt daran: Hat der Kunde selbst schon "
+    "ein Produkt gewählt oder klar benannt (auch über die Produktseite, auf der er "
+    "steht), biete das Muster GENAU dafür an und beginne die Datenaufnahme. Wurden "
+    "in diesem Gespräch schon Produkte gezeigt, ohne dass der Kunde eines gewählt "
+    "hat, frage mit Chips, für WELCHES davon das Muster sein soll; wähle NIEMALS "
+    "selbst eines aus. Wurde noch nichts gezeigt, rufe search_products auf und zeige "
+    "SOFORT 2-3 passende Böden (Bild + eine Zeile + Chips mit den Produktnamen); "
+    "höchstens EINE kurze Rückfrage, keine Fragekette. Gib nur die neue Antwort aus."
+)
+
+
+def _assistant_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    try:
+        parts = []
+        for b in content:
+            if isinstance(b, dict):
+                parts.append(b.get("text", "") or "")
+            else:
+                parts.append(getattr(b, "text", "") or "")
+        return "".join(parts)
+    except TypeError:
+        return ""
+
+
+def _products_shown(history: list) -> bool:
+    """True when an earlier assistant turn already presented concrete products
+    (product cards always carry a markdown link/image to lux-floor.de). Derived
+    from the message text so it survives a history rebuild after a restart."""
+    return any(m.get("role") == "assistant"
+               and _PRODUCT_LINK_RE.search(_assistant_text(m.get("content")))
+               for m in history)
+
+
+def _needs_sample_guard(user_msg: str, meta: dict, history: list) -> bool:
+    if (user_msg or "").strip().lower() != _SAMPLE_CHIP:
+        return False
+    ran_product_tool = any(t in _PRODUCT_TOOLS for t in meta.get("tools", []))
+    shown = _products_shown(history)
+    if not shown and not ran_product_tool:
+        return True   # nothing on the table and none fetched: the question chain
+    if shown and ran_product_tool:
+        return True   # products already on the table: never self-pick a new one
+    return False
 
 
 def _needs_price_guard(reply: str, meta: dict) -> bool:
