@@ -167,6 +167,88 @@ def _create_person(base: str, headers: dict, data: dict) -> str | None:
     return (r.json().get("data", {}).get("createPerson") or {}).get("id")
 
 
+def _post_json(path: str, body: dict, env: dict) -> dict:
+    """Ein Schreibzugriff auf die CRM. Getrennte Funktion, damit Tests sie
+    abfangen können, ohne die echte CRM anzufassen."""
+    base = env["TWENTY_API_URL"].rstrip("/")
+    headers = {"Authorization": f"Bearer {env['TWENTY_API_KEY']}",
+               "Content-Type": "application/json"}
+    r = requests.post(base + path, json=body, headers=headers, timeout=15)
+    r.raise_for_status()
+    return r.json()
+
+
+# Wer die Aufgabe bekommt. Voreinstellung ist das gemeinsame Konto
+# "Info Lux-Floor", damit sie nicht an einer einzelnen Person hängen bleibt.
+DEFAULT_TASK_ASSIGNEE = "c344d84f-ce44-42ad-90aa-6072fc7baaf0"
+
+
+def create_team_task(data: dict, opp_id, person_id, sku_str: str, area, env: dict):
+    """Legt zu einem Kunden aus dem Chat eine Aufgabe in der CRM an.
+
+    Der Weg dorthin am 10.09.2026: Telegram erreicht das Team nicht, E-Mail
+    braucht einen Schlüssel, ein Workflow lässt sich per API nicht anlegen, und
+    WhatsApp hängt daran, dass der Kunde selbst tippt. Aufgaben kann die API,
+    und das Team arbeitet ohnehin mit ihnen. Niemand muss etwas einrichten.
+
+    Wirft nie: eine fehlende Aufgabe darf keinen Lead kosten.
+    """
+    try:
+        action = data.get("action") or "none"
+        name = data.get("name") or "Unbekannt"
+        if action == "showroom_booking":
+            slot = data.get("showroom_slot") or "Zeit offen"
+            title = f"Showroom-Termin bestaetigen: {name}, {slot}"
+        elif (data.get("lead_flag") or "normal") != "normal":
+            title = f"Sonderanfrage aus dem Berater-Chat: {name}"
+        else:
+            title = f"Neuer Kunde aus dem Berater-Chat: {name}"
+
+        zeilen = [f"**{title}**", ""]
+        if data.get("phone_or_whatsapp"):
+            zeilen.append(f"Telefon/WhatsApp: {data['phone_or_whatsapp']}")
+        if data.get("email"):
+            zeilen.append(f"E-Mail: {data['email']}")
+        adresse = ", ".join(filter(None, [data.get("strasse"), data.get("plz"),
+                                          data.get("stadt")]))
+        if adresse:
+            zeilen.append(f"Adresse: {adresse}")
+        if data.get("showroom_slot"):
+            zeilen.append(f"Wunschtermin: {data['showroom_slot']}")
+        if sku_str:
+            zeilen.append(f"Produkt: {sku_str}")
+        if area:
+            zeilen.append(f"Flaeche: {area} m2")
+        if data.get("urgency"):
+            zeilen.append(f"Dringlichkeit: {data['urgency']}")
+        if data.get("conversation_summary"):
+            zeilen += ["", f"Worum es ging: {data['conversation_summary']}"]
+        if data.get("info_note"):
+            zeilen.append(f"Notiz: {data['info_note']}")
+        text = "\n".join(zeilen)
+
+        task = _post_json("/rest/tasks", {
+            "title": title,
+            "bodyV2": {"markdown": text},
+            "status": "TODO",
+            "assigneeId": env.get("TWENTY_TASK_ASSIGNEE_ID") or DEFAULT_TASK_ASSIGNEE,
+        }, env)
+        task_id = ((task.get("data") or {}).get("createTask") or {}).get("id")
+        if not task_id:
+            return None
+        if opp_id:
+            _post_json("/rest/taskTargets",
+                       {"taskId": task_id, "targetOpportunityId": opp_id}, env)
+        if person_id:
+            _post_json("/rest/taskTargets",
+                       {"taskId": task_id, "targetPersonId": person_id}, env)
+        logger.info("CRM-Aufgabe angelegt: %s", task_id)
+        return task_id
+    except Exception as e:
+        logger.warning("CRM-Aufgabe fehlgeschlagen (nicht blockierend): %s", e)
+        return None
+
+
 def _kontaktzeile(data: dict) -> list:
     """Die Kontaktdaten IM Text, damit das Team direkt schreiben kann und keine
     CRM öffnen muss (Regel vom 10.08.2026)."""
@@ -182,7 +264,8 @@ def _kontaktzeile(data: dict) -> list:
     return bits
 
 
-def notify_lead(data: dict, sku_str: str, area, hot: bool, opp_id, env: dict) -> str:
+def notify_lead(data: dict, sku_str: str, area, hot: bool, opp_id, env: dict,
+                task_id=None) -> str:
     """Das Team erfährt von JEDEM Kunden, per E-Mail.
 
     Vorher ging nur ein HEISSER Lead raus, und zwar nach Telegram zu Oleg, wo
@@ -220,12 +303,12 @@ def notify_lead(data: dict, sku_str: str, area, hot: bool, opp_id, env: dict) ->
     body = "\n".join(lines)
 
     status = send_team_mail(subject, body, env, reply_to=data.get("email") or "")
-    if status != "sent":
-        # Netz darunter: solange das Postfach nicht steht (oder gerade streikt),
-        # geht die Nachricht den alten Weg. Ein Kunde darf nie verloren gehen,
-        # nur weil ein Schluessel fehlt.
+    if status != "sent" and not task_id:
+        # Weder Aufgabe noch Mail: JETZT ist ein Kunde in Gefahr. Das ist eine
+        # Störung und geht deshalb an Oleg, nicht als Kundenmeldung, sondern
+        # damit wir es reparieren. Normale Kunden sieht er nicht mehr.
         _send_problem_alert(
-            f"[Почта команде не ушла: {status}] {subject}\n{body}", env)
+            f"[Ни задача в CRM, ни почта не прошли: {status}] {subject}\n{body}", env)
     return status
 
 
@@ -320,7 +403,11 @@ def create_lead(data: dict, env: dict) -> dict:
         logger.info("Twenty lead created opp=%s person=%s hot=%s", opp_id, person_id, hot)
 
         # Kunden gehören dem Team, nicht Oleg (seine Ansage 10.09.2026 13:27).
-        notify_lead(data, sku_str, area, hot, opp_id, env)
+        # Der verlässliche Weg ist die Aufgabe in der CRM: die legt die API an,
+        # und das Team arbeitet dort schon. Die Mail bleibt daneben, falls
+        # später doch ein Postfach hinterlegt wird.
+        task_id = create_team_task(data, opp_id, person_id, sku_str, area, env)
+        notify_lead(data, sku_str, area, hot, opp_id, env, task_id=task_id)
         if person_id is None:
             # Алерт обязан нести сами контакты: команда связывается с клиентом
             # из сообщения, не открывая CRM и не спрашивая никого (10.08.2026).

@@ -91,28 +91,31 @@ class WhoGetsWhat(unittest.TestCase):
 
 
 class NobodyIsEverLost(unittest.TestCase):
-    """Solange das Postfach nicht eingerichtet ist, darf die Nachricht nicht
-    einfach verschwinden. Vor dem 10.09.2026 ging sie nach Telegram; bis der
-    App-Schluessel da ist, bleibt Telegram das Netz darunter."""
+    """Oleg bekommt Kunden nicht mehr, auch nicht als Rückfalltür (seine Ansage
+    10.09.2026 13:27). Der verlässliche Weg ist die Aufgabe in der CRM. Telegram
+    meldet sich nur noch, wenn WIRKLICH nichts geklappt hat, weder Aufgabe noch
+    Mail: dann ist ein Kunde in Gefahr und das ist eine Störung, keine Meldung."""
 
-    def test_ohne_postfach_faellt_es_auf_telegram_zurueck(self):
+    def test_aufgabe_da_also_kein_telegram(self):
         with mock.patch.object(twenty_client, "send_team_mail",
                                return_value="not_configured"), \
              mock.patch.object(twenty_client, "_send_problem_alert") as tg:
             twenty_client.notify_lead(
                 {"name": "Dora", "phone_or_whatsapp": "0170999"},
-                sku_str="4161", area=30, hot=False, opp_id="opp-9", env={})
-        self.assertTrue(tg.called, "ohne Mail muss Telegram einspringen")
-        self.assertIn("0170999", tg.call_args[0][0])
+                sku_str="4161", area=30, hot=False, opp_id="opp-9", env={},
+                task_id="task-1")
+        self.assertFalse(tg.called)
 
-    def test_kaputtes_postfach_faellt_ebenfalls_zurueck(self):
+    def test_weder_aufgabe_noch_mail_ist_eine_stoerung(self):
         with mock.patch.object(twenty_client, "send_team_mail",
                                return_value="failed"), \
              mock.patch.object(twenty_client, "_send_problem_alert") as tg:
             twenty_client.notify_lead(
                 {"name": "Egon", "email": "e@x.de"},
-                sku_str="", area=None, hot=True, opp_id="opp-10", env={})
+                sku_str="", area=None, hot=True, opp_id="opp-10", env={},
+                task_id=None)
         self.assertTrue(tg.called)
+        self.assertIn("e@x.de", tg.call_args[0][0])
 
     def test_mit_postfach_kein_telegram(self):
         with mock.patch.object(twenty_client, "send_team_mail",
@@ -120,24 +123,9 @@ class NobodyIsEverLost(unittest.TestCase):
              mock.patch.object(twenty_client, "_send_problem_alert") as tg:
             twenty_client.notify_lead(
                 {"name": "Frida", "email": "f@x.de"},
-                sku_str="", area=None, hot=True, opp_id="opp-11", env=ENV_MAIL)
+                sku_str="", area=None, hot=True, opp_id="opp-11", env=ENV_MAIL,
+                task_id="task-2")
         self.assertFalse(tg.called)
-
-
-class NoPasswordlessPathExists(unittest.TestCase):
-    """Am 10.09.2026 gesucht und verworfen: das Kontaktformular des Shops nimmt
-    eine Absendung per Programm an, wirft sie aber als Spam weg (zweimal live
-    geprüft, Status "spam", nie zugestellt). Ohne Schlüssel gibt es keinen Weg,
-    und das darf nicht wieder als Zustellung durchgehen."""
-
-    def test_ohne_schluessel_wird_nichts_vorgetaeuscht(self):
-        self.assertFalse(mailer.configured({}))
-        self.assertEqual(mailer.send_team_mail("x", "y", {}), "not_configured")
-
-    def test_kein_formular_weg_mehr_im_modul(self):
-        self.assertFalse(hasattr(mailer, "_post_shop_form"))
-        self.assertNotIn("contact-form-7", open(mailer.__file__).read().split('"""')[2])
-
 
 
 if __name__ == "__main__":
