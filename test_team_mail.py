@@ -124,48 +124,20 @@ class NobodyIsEverLost(unittest.TestCase):
         self.assertFalse(tg.called)
 
 
-class ShopFormNeedsNoPassword(unittest.TestCase):
-    """Der Weg ohne jeden Schlüssel (10.09.2026 geprüft).
+class NoPasswordlessPathExists(unittest.TestCase):
+    """Am 10.09.2026 gesucht und verworfen: das Kontaktformular des Shops nimmt
+    eine Absendung per Programm an, wirft sie aber als Spam weg (zweimal live
+    geprüft, Status "spam", nie zugestellt). Ohne Schlüssel gibt es keinen Weg,
+    und das darf nicht wieder als Zustellung durchgehen."""
 
-    Der Shop hat auf /kontakt/ ein eigenes Contact-Form-7-Formular ohne Captcha
-    (Formular 527, Pflichtfelder your-name, your-email, your-comment). Es nimmt
-    eine Absendung per Programm an und WordPress schickt die Mail selbst an das
-    Postfach des Ladens. Kein App-Passwort, kein Anbieter, keine Kosten.
-    """
+    def test_ohne_schluessel_wird_nichts_vorgetaeuscht(self):
+        self.assertFalse(mailer.configured({}))
+        self.assertEqual(mailer.send_team_mail("x", "y", {}), "not_configured")
 
-    def test_ohne_smtp_geht_es_ueber_das_shop_formular(self):
-        with mock.patch.object(mailer, "_post_shop_form",
-                               return_value="mail_sent") as form, \
-             mock.patch.object(mailer, "_smtp_send") as smtp:
-            res = mailer.send_team_mail("Showroom-Termin", "Bernd, morgen", {})
-        self.assertEqual(res, "sent")
-        self.assertTrue(form.called)
-        self.assertFalse(smtp.called)
-        felder = form.call_args[0][0]
-        self.assertIn("Showroom-Termin", felder["your-comment"])
-        self.assertIn("Bernd", felder["your-comment"])
-        self.assertTrue(felder["your-name"])
-        self.assertTrue(felder["your-email"])
+    def test_kein_formular_weg_mehr_im_modul(self):
+        self.assertFalse(hasattr(mailer, "_post_shop_form"))
+        self.assertNotIn("contact-form-7", open(mailer.__file__).read().split('"""')[2])
 
-    def test_kundenmail_wird_zur_absenderadresse_damit_das_team_antworten_kann(self):
-        with mock.patch.object(mailer, "_post_shop_form", return_value="mail_sent") as form:
-            mailer.send_team_mail("Neuer Lead", "Clara", {}, reply_to="clara@example.de")
-        self.assertEqual(form.call_args[0][0]["your-email"], "clara@example.de")
-
-    def test_formular_abgelehnt_heisst_failed_und_kein_absturz(self):
-        with mock.patch.object(mailer, "_post_shop_form", return_value="validation_failed"):
-            self.assertEqual(mailer.send_team_mail("x", "y", {}), "failed")
-
-    def test_netzfehler_reisst_den_chat_nicht_mit(self):
-        with mock.patch.object(mailer, "_post_shop_form", side_effect=OSError("down")):
-            self.assertEqual(mailer.send_team_mail("x", "y", {}), "failed")
-
-    def test_smtp_hat_vorrang_wenn_jemand_es_doch_einrichtet(self):
-        with mock.patch.object(mailer, "_smtp_send", return_value=None) as smtp, \
-             mock.patch.object(mailer, "_post_shop_form") as form:
-            mailer.send_team_mail("x", "y", ENV_MAIL)
-        self.assertTrue(smtp.called)
-        self.assertFalse(form.called)
 
 
 if __name__ == "__main__":
