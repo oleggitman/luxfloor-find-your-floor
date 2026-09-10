@@ -151,21 +151,25 @@ def team_hours_block(now=None) -> str:
     if shop_open_now(now):
         return (
             "# TEAM GERADE ERREICHBAR\n"
-            "Das Team ist JETZT BESETZT (Mo-Fr 9-18 Uhr). Wenn du etwas nicht "
-            "loesen kannst (kein passendes Produkt, Sonderwunsch, Auslandsversand, "
-            "Frage zu einer bestehenden Bestellung), uebergib SOFORT per WhatsApp: "
-            f"gib den Link [Direkt ans Team schreiben]({TEAM_WHATSAPP}?text=...) mit "
-            "einem kurzen, URL-kodierten Text, der Anliegen und Produkt nennt. "
-            "Frage dabei KEINE Kontaktdaten ab: der Kunde schreibt uns, das reicht."
+            "Das Team ist JETZT BESETZT (Mo-Fr 9-18 Uhr). Uebergib per WhatsApp "
+            "IMMER dann, wenn ein Mensch weitermachen muss: kein passendes Produkt, "
+            "Sonderwunsch, Auslandsversand, Frage zu einer Bestellung, UND BEIM "
+            "SHOWROOM-TERMIN, sobald der Kunde eine Zeit gewaehlt hat. "
+            f"Gib den Link [Direkt ans Team schreiben]({TEAM_WHATSAPP}?text=...) mit "
+            "einem kurzen, URL-kodierten Text, der Anliegen, Produkt und ggf. die "
+            "Wunschzeit nennt. Frage KEINE Kontaktdaten ab: der Kunde schreibt uns, "
+            "damit hat das Team seine Nummer und er gibt nichts preis."
         )
     return (
         "# TEAM GERADE NICHT ERREICHBAR\n"
-        "Das Team ist JETZT NICHT besetzt (erreichbar Mo-Fr 9-18 Uhr). Wenn du "
-        "etwas nicht loesen kannst: sag ehrlich, dass gerade niemand da ist, und "
-        f"biete BEIDES an: den WhatsApp-Link [Dem Team schreiben]({TEAM_WHATSAPP}?text=...) "
-        "mit kurzem Text, damit die Nachricht morgen frueh oben liegt, ODER Name "
-        "und WhatsApp-Nummer bei dir zu lassen. Sag beim Fragen ausdruecklich "
-        "dazu, dass sich das Team per WhatsApp meldet und NICHT anruft."
+        "Das Team ist JETZT NICHT besetzt (erreichbar Mo-Fr 9-18 Uhr). Immer wenn "
+        "ein Mensch weitermachen muss (Sonderwunsch, Auslandsversand, Frage zu "
+        "einer Bestellung, UND BEIM SHOWROOM-TERMIN nach der Zeitwahl): sag "
+        "ehrlich, dass gerade niemand da ist, und biete BEIDES an: den "
+        f"WhatsApp-Link [Dem Team schreiben]({TEAM_WHATSAPP}?text=...) mit kurzem "
+        "Text, damit die Nachricht morgen frueh oben liegt, ODER Name und "
+        "WhatsApp-Nummer bei dir zu lassen. Sag beim Fragen ausdruecklich dazu, "
+        "dass sich das Team per WhatsApp meldet und NICHT anruft."
     )
 
 

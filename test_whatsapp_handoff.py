@@ -59,5 +59,28 @@ class TheLineTheBotGets(unittest.TestCase):
         self.assertLess(len(team_hours_block(at(2026, 9, 10, 11, 0))), 700)
 
 
+class ShowroomGehtAuchUeberWhatsApp(unittest.TestCase):
+    """Am 10.09.2026 durchgespielt und verworfen: E-Mail ans Team braucht einen
+    Schlüssel, und ein Workflow in der CRM lässt sich per API nicht anlegen
+    ("Method not allowed", auch mit Admin-Schlüssel). Beides braucht einen
+    Menschen, der etwas einrichtet.
+
+    Was ohne alles funktioniert, steht schon: der Kunde tippt selbst auf WhatsApp.
+    Also gilt das auch für den Termin. Die CRM behält den Eintrag als Historie,
+    die Nachricht kommt dort an, wo das Team tatsächlich sitzt.
+    """
+
+    def test_die_zeile_verlangt_whatsapp_auch_beim_termin(self):
+        for block in (team_hours_block(at(2026, 9, 10, 11, 0)),
+                      team_hours_block(at(2026, 9, 10, 22, 0))):
+            self.assertIn("showroom", block.lower(),
+                          "der Termin muss in der Zeile vorkommen, sonst denkt "
+                          "das Modell, WhatsApp sei nur für Sonderwünsche")
+
+    def test_offen_und_zu_nennen_beide_den_link(self):
+        self.assertIn("wa.me/491794033381", team_hours_block(at(2026, 9, 10, 11, 0)))
+        self.assertIn("wa.me/491794033381", team_hours_block(at(2026, 9, 10, 22, 0)))
+
+
 if __name__ == "__main__":
     unittest.main()
