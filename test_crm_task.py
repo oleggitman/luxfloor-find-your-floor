@@ -28,10 +28,10 @@ ENV = {"TWENTY_API_URL": "https://api.twenty.com", "TWENTY_API_KEY": "k",
 class NurWennEinMenschUebernehmenMuss(unittest.TestCase):
     """Seine Ansage 10.09.2026 15:22: es geht um EINEN Fall, nicht um jeden Lead.
 
-    Der Fall: der Katalog gibt es nicht her (kein passendes Produkt, Sonderwunsch,
-    Auslandsversand), der Kunde ist warm, und ein Mensch muss weitermachen. Nur
-    dafür entsteht eine Aufgabe. Ein normaler Lead und ein Showroom-Termin laufen
-    ihre eigenen Wege und dürfen die Aufgabenliste des Teams nicht zumüllen.
+    Die Grenze ist: MUSS ein Mensch etwas tun? Zwei Fälle sagen ja, der Katalog
+    reicht nicht (kein Produkt, Sonderwunsch, Auslandsversand) und ein Kunde hat
+    eine Showroom-Zeit gewählt, die jemand bestätigen muss. Ein normaler Lead
+    sagt nein: er steht in der CRM und braucht niemanden.
     """
 
     def setUp(self):
@@ -71,12 +71,18 @@ class NurWennEinMenschUebernehmenMuss(unittest.TestCase):
             opp_id="o", person_id="p", sku_str="4163", area=20, env=ENV)
         self.assertEqual(self._tasks(), [])
 
-    def test_showroom_erzeugt_KEINE_aufgabe(self):
+    def test_showroom_erzeugt_eine_aufgabe_mit_der_uhrzeit(self):
+        """Ein Termin, von dem niemand weiss, ist kein Termin. Der Kunde hat eine
+        Zeit gewaehlt, ein Mensch muss sie bestaetigen."""
         twenty_client.create_team_task(
             {"name": "Bernd", "action": "showroom_booking",
-             "showroom_slot": "Morgen vormittags"},
-            opp_id="o", person_id="p", sku_str="", area=None, env=ENV)
-        self.assertEqual(self._tasks(), [])
+             "showroom_slot": "Morgen vormittags", "phone_or_whatsapp": "0170123"},
+            opp_id="o", person_id="p", sku_str="4163 Sakura", area=None, env=ENV)
+        body = self._tasks()[0]
+        self.assertIn("Showroom", body["title"])
+        self.assertIn("Morgen vormittags", body["title"])
+        self.assertIn("Bernd", body["title"])
+        self.assertIn("0170123", body["bodyV2"]["markdown"])
 
     def test_aufgabe_haengt_am_deal_und_am_kontakt(self):
         twenty_client.create_team_task(

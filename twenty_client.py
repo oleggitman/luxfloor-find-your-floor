@@ -197,15 +197,21 @@ def create_team_task(data: dict, opp_id, person_id, sku_str: str, area, env: dic
 
     Wirft nie: eine fehlende Aufgabe darf keinen Lead kosten.
     """
-    # NUR der eine Fall: der Katalog gibt es nicht her und ein Mensch muss
-    # weitermachen (seine Ansage 10.09.2026 15:22). Ein normaler Lead und ein
-    # Showroom-Termin gehen ihre eigenen Wege; die Aufgabenliste des Teams ist
-    # ihr Arbeitsvorrat und darf nicht zugemuellt werden.
-    if (data.get("lead_flag") or "normal") == "normal":
+    # Die Grenze ist: MUSS ein Mensch etwas tun? Zwei Fälle sagen ja: der
+    # Katalog reicht nicht, oder jemand hat eine Showroom-Zeit gewählt, die
+    # bestätigt werden muss. Ein normaler Lead sagt nein, er steht in der CRM;
+    # die Aufgabenliste ist der Arbeitsvorrat des Teams, kein Ablagefach.
+    action = data.get("action") or "none"
+    sonderfall = (data.get("lead_flag") or "normal") != "normal"
+    if not sonderfall and action != "showroom_booking":
         return None
     try:
         name = data.get("name") or "Unbekannt"
-        title = f"Kunde aus dem Berater-Chat uebernehmen: {name}"
+        if action == "showroom_booking":
+            slot = data.get("showroom_slot") or "Zeit offen"
+            title = f"Showroom-Termin bestaetigen: {name}, {slot}"
+        else:
+            title = f"Kunde aus dem Berater-Chat uebernehmen: {name}"
 
         zeilen = [f"**{title}**", ""]
         if data.get("phone_or_whatsapp"):
@@ -306,7 +312,8 @@ def notify_lead(data: dict, sku_str: str, area, hot: bool, opp_id, env: dict,
     body = "\n".join(lines)
 
     status = send_team_mail(subject, body, env, reply_to=data.get("email") or "")
-    braucht_menschen = (data.get("lead_flag") or "normal") != "normal"
+    braucht_menschen = ((data.get("lead_flag") or "normal") != "normal"
+                        or (data.get("action") or "none") == "showroom_booking")
     if status != "sent" and not task_id and braucht_menschen:
         # Ein Kunde, für den ein MENSCH weitermachen muss, und weder Aufgabe
         # noch Mail kam durch: jetzt ist er in Gefahr. Das ist eine Störung und
