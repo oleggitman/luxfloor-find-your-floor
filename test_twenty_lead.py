@@ -56,6 +56,12 @@ NO_PEOPLE = {"data": {"people": []}}
 
 
 class LeadSurvivesPersonFailure(unittest.TestCase):
+    def setUp(self):
+        # Письмо команде перехватываем: тест не ходит в почтовый сервер.
+        patcher = mock.patch.object(tc, "send_team_mail", return_value="sent")
+        self.mails = patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_person_400_still_creates_opportunity_with_contact_in_note(self):
         calls = []
 
@@ -79,12 +85,13 @@ class LeadSurvivesPersonFailure(unittest.TestCase):
         self.assertNotIn("pointOfContactId", opp_call)
         self.assertIn("+39 333 1234567", opp_call["notiz"])
         self.assertIn("mario@example.it", opp_call["notiz"])
-        tg = [j for u, j in calls if "api.telegram.org" in u]
-        card_alerts = [j["text"] for j in tg if "БЕЗ карточки контакта" in j["text"]]
-        self.assertTrue(card_alerts)
-        # алерт несёт контакты: команда звонит из сообщения, не открывая CRM
-        self.assertIn("+39 333 1234567", card_alerts[0])
-        self.assertIn("mario@example.it", card_alerts[0])
+        # Контакты обязаны быть в самом уведомлении команде (правило 10.08.2026),
+        # а команда читает почту, не телеграм Олега (проверено 10.09.2026).
+        bodies = [c[0][1] for c in self.mails.call_args_list]
+        card_mails = [b for b in bodies if "ohne Kontaktkarte" in b or "Kontaktkarte" in b]
+        self.assertTrue(card_mails)
+        self.assertIn("+39 333 1234567", card_mails[0])
+        self.assertIn("mario@example.it", card_mails[0])
 
     def test_opportunity_failure_sends_problem_alert(self):
         calls = []
@@ -106,10 +113,12 @@ class LeadSurvivesPersonFailure(unittest.TestCase):
         self.assertEqual(out["status"], "error")
         tg = [j for u, j in calls if "api.telegram.org" in u]
         failure_alerts = [j["text"] for j in tg if "СБОЙ записи лида" in j["text"]]
-        self.assertTrue(failure_alerts)
-        # алерт обязан нести контакты клиента: команда связывается без CRM
-        self.assertIn("+39 333 1234567", failure_alerts[0])
-        self.assertIn("mario@example.it", failure_alerts[0])
+        self.assertTrue(failure_alerts, "поломка CRM это техника, она остаётся Олегу")
+        # А клиент не теряется: контакты уходят команде письмом.
+        bodies = [c[0][1] for c in self.mails.call_args_list]
+        self.assertTrue(bodies)
+        self.assertIn("+39 333 1234567", bodies[0])
+        self.assertIn("mario@example.it", bodies[0])
 
 
 class ReturningCustomerReusesCard(unittest.TestCase):
@@ -139,6 +148,12 @@ class ReturningCustomerReusesCard(unittest.TestCase):
                 mock.patch.object(tc.requests, "patch", side_effect=patch):
             out = tc.create_lead(dict(LEAD), ENV)
         return out, calls
+
+    def setUp(self):
+        # Письмо команде перехватываем: тест не ходит в почтовый сервер.
+        patcher = mock.patch.object(tc, "send_team_mail", return_value="sent")
+        self.mails = patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_existing_person_found_by_email_is_linked(self):
         def fake_post(url, json=None):
@@ -240,8 +255,12 @@ class ReturningCustomerReusesCard(unittest.TestCase):
         opp = [j for u, j in calls if "/rest/opportunities" in u][0]
         self.assertNotIn("pointOfContactId", opp)
         self.assertIn("mario@example.it", opp["notiz"])
+        # Олегу уходит техническая строка, команде письмо с контактами.
         tg = [j["text"] for u, j in calls if "api.telegram.org" in u]
-        self.assertTrue([t for t in tg if "БЕЗ карточки контакта" in t])
+        self.assertTrue([x for x in tg if "без карточки контакта" in x.lower()])
+        bodies = [c[0][1] for c in self.mails.call_args_list]
+        self.assertTrue([b for b in bodies if "mario@example.it" in b],
+                        "клиент не должен потеряться: контакты идут команде")
 
     def test_search_outage_never_loses_the_lead(self):
         """Поиск недоступен (сеть, 500): падать нельзя, лид пишется как обычно."""

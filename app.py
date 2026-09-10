@@ -21,6 +21,8 @@ import os
 import re
 import time
 import uuid
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from collections import deque
 from pathlib import Path
 from typing import Optional
@@ -123,6 +125,49 @@ def _read_recent(limit: int) -> list:
         return out
     except OSError:
         return list(CONV_LOG)[-limit:]
+
+# ---------------------------------------------------------------------------
+# Übergabe ans Team per WhatsApp (10.09.2026)
+#
+# Der Shop hat auf jeder Seite die Nummer wa.me/491794033381, dort antworten
+# Menschen Mo-Fr 9 bis 18 Uhr (Ilya). Der Kunde tippt SELBST auf den Link: dann
+# hat das Team seine Nummer und darf 24 Stunden frei antworten. Andersherum
+# (wir geben dem Team die Nummer, das Team schreibt zuerst) bräuchte es die
+# bezahlte WhatsApp-Plattform. Deutsche geben ihre Nummer ungern heraus; wenn
+# sie uns schreiben, geben sie gar nichts her.
+#
+# Das Modell weiß nicht, wie spät es ist. Diese eine Zeile sagt es ihm.
+TEAM_WHATSAPP = "https://wa.me/491794033381"
+TEAM_OPEN_DAYS = (0, 1, 2, 3, 4)      # Mo bis Fr
+TEAM_OPEN_FROM, TEAM_OPEN_TO = 9, 18  # Ortszeit Neuss
+
+
+def shop_open_now(now=None) -> bool:
+    now = now or datetime.now(ZoneInfo("Europe/Berlin"))
+    return now.weekday() in TEAM_OPEN_DAYS and TEAM_OPEN_FROM <= now.hour < TEAM_OPEN_TO
+
+
+def team_hours_block(now=None) -> str:
+    if shop_open_now(now):
+        return (
+            "# TEAM GERADE ERREICHBAR\n"
+            "Das Team ist JETZT BESETZT (Mo-Fr 9-18 Uhr). Wenn du etwas nicht "
+            "loesen kannst (kein passendes Produkt, Sonderwunsch, Auslandsversand, "
+            "Frage zu einer bestehenden Bestellung), uebergib SOFORT per WhatsApp: "
+            f"gib den Link [Direkt ans Team schreiben]({TEAM_WHATSAPP}?text=...) mit "
+            "einem kurzen, URL-kodierten Text, der Anliegen und Produkt nennt. "
+            "Frage dabei KEINE Kontaktdaten ab: der Kunde schreibt uns, das reicht."
+        )
+    return (
+        "# TEAM GERADE NICHT ERREICHBAR\n"
+        "Das Team ist JETZT NICHT besetzt (erreichbar Mo-Fr 9-18 Uhr). Wenn du "
+        "etwas nicht loesen kannst: sag ehrlich, dass gerade niemand da ist, und "
+        f"biete BEIDES an: den WhatsApp-Link [Dem Team schreiben]({TEAM_WHATSAPP}?text=...) "
+        "mit kurzem Text, damit die Nachricht morgen frueh oben liegt, ODER Name "
+        "und WhatsApp-Nummer bei dir zu lassen. Sag beim Fragen ausdruecklich "
+        "dazu, dass sich das Team per WhatsApp meldet und NICHT anruft."
+    )
+
 
 SYSTEM = [
     {"type": "text", "text": SYSTEM_PROMPT},
@@ -234,7 +279,9 @@ TOOLS = [
         "description": (
             "Create a lead in the CRM with the captured profile, contact, and consent. "
             "Call once: after the customer has given DSGVO consent and at least "
-            "Name + (Telefon/WhatsApp OR E-Mail) + Stadt + PLZ. "
+            "Name + (Telefon/WhatsApp OR E-Mail). Add Stadt + PLZ only when we "
+            "actually ship something to them; a showroom booking and a question "
+            "passed to the team do not need an address. "
             "Do NOT call without consent. The backend computes the estimated value "
             "and HOT/Warm score and notifies the team; you only pass honest captured data."
         ),
@@ -264,11 +311,17 @@ TOOLS = [
                 "info_note":  {"type": "string"},
                 "conversation_summary": {"type": "string", "description": "VERY brief summary for the sales team: what the customer wants, key concerns, budget signal. Max 2-3 short sentences. German."},
                 "lead_flag":  {"type": "string", "enum": ["normal", "auslandsversand", "sonderanfrage"], "description": "Mark 'auslandsversand' for abroad delivery, 'sonderanfrage' for any special request the assistant cannot resolve. Default 'normal'."},
+                # "sample_request" bleibt nur für Altfälle im Schema; der Weg zum
+                # Muster ist seit 10.09.2026 der Knopf auf der Produktseite.
                 "action":     {"type": "string", "enum": ["none", "sample_request", "showroom_booking"]},
                 "showroom_slot": {"type": "string"},
                 "dsgvo_consent": {"type": "boolean"},
             },
-            "required": ["name", "stadt", "plz", "urgency", "dsgvo_consent"],
+            # Stadt/PLZ nur, wenn wir wirklich etwas verschicken. Für einen
+            # Showroom-Termin (der Kunde kommt zu uns) und für eine Sonderanfrage
+            # ans Team sind sie eine Hürde ohne Gegenwert: Befund 10.09.2026,
+            # 33 Gespräche, 0 Leads, jedes Mal starb es an der Datenabfrage.
+            "required": ["name", "urgency", "dsgvo_consent"],
         },
     },
 ]
@@ -690,7 +743,9 @@ _SAMPLE_CORRECTION = (
     "Muster bestellen'), und die eine erlaubte Rückfrage ist verbraucht: KEINE "
     "weitere Frage vor dem Produkt. Antworte neu: Hat der Kunde selbst schon ein "
     "Produkt gewählt oder klar benannt (auch über die Produktseite, auf der er "
-    "steht), biete das Muster GENAU dafür an und beginne die Datenaufnahme. Wurden "
+    "steht), biete das Muster GENAU dafür an und gib den sample_url der Karte "
+    "mit dem Hinweis auf den Knopf 'Gratis muster bestellen'; frage KEINE "
+    "Adressdaten im Chat ab. Wurden "
     "schon Produkte gezeigt, frage mit Chips, für WELCHES davon das Muster sein "
     "soll; wähle NIEMALS selbst eines aus. Sonst rufe search_products mit dem auf, "
     "was du schon weißt, und zeige SOFORT 2-3 passende Böden (Bild + eine Zeile + "
@@ -775,7 +830,7 @@ def _run_turn(messages: list) -> tuple[str, dict]:
         resp = ai.messages.create(
             model=MODEL,
             max_tokens=1200,
-            system=SYSTEM,
+            system=SYSTEM + [{"type": "text", "text": team_hours_block()}],
             tools=TOOLS,
             messages=messages,
         )

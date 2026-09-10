@@ -16,6 +16,8 @@ import logging
 
 import requests
 
+from mailer import send_team_mail
+
 logger = logging.getLogger(__name__)
 
 NEW_LEAD_STAGE = "NEW_LEAD"
@@ -165,6 +167,68 @@ def _create_person(base: str, headers: dict, data: dict) -> str | None:
     return (r.json().get("data", {}).get("createPerson") or {}).get("id")
 
 
+def _kontaktzeile(data: dict) -> list:
+    """Die Kontaktdaten IM Text, damit das Team direkt schreiben kann und keine
+    CRM öffnen muss (Regel vom 10.08.2026)."""
+    bits = [f"Name: {data.get('name') or 'Unbekannt'}"]
+    if data.get("phone_or_whatsapp"):
+        bits.append(f"Telefon/WhatsApp: {data['phone_or_whatsapp']}")
+    if data.get("email"):
+        bits.append(f"E-Mail: {data['email']}")
+    addr = ", ".join(filter(None, [data.get("strasse"), data.get("plz"),
+                                   data.get("stadt")]))
+    if addr:
+        bits.append(f"Adresse: {addr}")
+    return bits
+
+
+def notify_lead(data: dict, sku_str: str, area, hot: bool, opp_id, env: dict) -> str:
+    """Das Team erfährt von JEDEM Kunden, per E-Mail.
+
+    Vorher ging nur ein HEISSER Lead raus, und zwar nach Telegram zu Oleg, wo
+    niemand aus dem Laden sitzt. Ein Showroom-Termin gilt nach der Punktevergabe
+    nie als heiß, also erfuhr vom Termin niemand: Befund 10.09.2026.
+    """
+    action = data.get("action") or "none"
+    if action == "showroom_booking":
+        subject = f"Showroom-Termin: {data.get('showroom_slot') or 'Zeit offen'}"
+    elif hot:
+        subject = "Heisser Lead aus dem Berater-Chat"
+    elif (data.get("lead_flag") or "normal") != "normal":
+        subject = f"Sonderanfrage aus dem Berater-Chat ({data['lead_flag']})"
+    else:
+        subject = "Neuer Lead aus dem Berater-Chat"
+
+    lines = _kontaktzeile(data)
+    if data.get("showroom_slot"):
+        lines.append(f"Wunschtermin: {data['showroom_slot']} "
+                     f"(bitte beim Kunden bestaetigen)")
+    if sku_str:
+        lines.append(f"Produkt: {sku_str}")
+    if area:
+        lines.append(f"Flaeche: {area} m2")
+    if data.get("urgency"):
+        lines.append(f"Dringlichkeit: {data['urgency']}")
+    if data.get("conversation_summary"):
+        lines.append("")
+        lines.append(f"Worum es ging: {data['conversation_summary']}")
+    if data.get("info_note"):
+        lines.append(f"Notiz: {data['info_note']}")
+    if opp_id:
+        lines.append("")
+        lines.append(f"CRM: {opp_id}")
+    body = "\n".join(lines)
+
+    status = send_team_mail(subject, body, env)
+    if status != "sent":
+        # Netz darunter: solange das Postfach nicht steht (oder gerade streikt),
+        # geht die Nachricht den alten Weg. Ein Kunde darf nie verloren gehen,
+        # nur weil ein Schluessel fehlt.
+        _send_problem_alert(
+            f"[Почта команде не ушла: {status}] {subject}\n{body}", env)
+    return status
+
+
 def create_lead(data: dict, env: dict) -> dict:
     """Create a Person + Opportunity in Twenty from the assistant's create_lead tool call."""
     base = _base(env)
@@ -255,8 +319,8 @@ def create_lead(data: dict, env: dict) -> dict:
         opp_id = (r.json().get("data", {}).get("createOpportunity") or {}).get("id")
         logger.info("Twenty lead created opp=%s person=%s hot=%s", opp_id, person_id, hot)
 
-        if hot:
-            _send_telegram_alert(name, sku_str, area, data.get("stadt", ""), opp_id, env)
+        # Kunden gehören dem Team, nicht Oleg (seine Ansage 10.09.2026 13:27).
+        notify_lead(data, sku_str, area, hot, opp_id, env)
         if person_id is None:
             # Алерт обязан нести сами контакты: команда связывается с клиентом
             # из сообщения, не открывая CRM и не спрашивая никого (10.08.2026).
@@ -268,10 +332,15 @@ def create_lead(data: dict, env: dict) -> dict:
             addr = ", ".join(filter(None, [data.get("strasse"), data.get("plz"), data.get("stadt")]))
             if addr:
                 bits.append(f"Адрес: {addr}")
+            send_team_mail(
+                "Lead ohne Kontaktkarte in der CRM: bitte manuell nachtragen",
+                "Der Lead ist gespeichert, aber ohne Kontaktkarte. "
+                "Die Daten stehen hier:\n" + "\n".join(bits)
+                + f"\nCRM: {opp_id}", env)
             _send_problem_alert(
-                "Лид записан, но БЕЗ карточки контакта (контакты в заметке сделки и здесь).\n"
-                + "\n".join(bits)
-                + f"\nTwenty opp ID: {opp_id}\nПричина: {person_err[:200]}", env)
+                "Технический сбой: лид записан без карточки контакта. "
+                f"Команде письмо ушло, контакты у них.\nCRM: {opp_id}\n"
+                f"Причина: {person_err[:200]}", env)
 
         return {"status": "ok", "lead_id": opp_id, "hot": hot}
 
@@ -288,9 +357,15 @@ def create_lead(data: dict, env: dict) -> dict:
         addr = ", ".join(filter(None, [data.get("strasse"), data.get("plz"), data.get("stadt")]))
         if addr:
             contact_bits.append(f"Адрес: {addr}")
-        _send_problem_alert(
-            "СБОЙ записи лида в CRM! Внесите клиента руками, все данные здесь:\n"
+        send_team_mail(
+            "Neuer Kunde aus dem Berater-Chat (CRM gerade nicht erreichbar)",
+            "Bitte manuell aufnehmen, alle Daten hier:\n"
             + "\n".join(contact_bits)
+            + f"\nProdukt: {sku_str}\nFlaeche: {area} m2"
+            + (f"\nWorum es ging: {data.get('conversation_summary', '')[:300]}"
+               if data.get("conversation_summary") else ""), env)
+        _send_problem_alert(
+            "СБОЙ записи лида в CRM. Команде письмо с контактами ушло.\n"
             + f"\nПродукт: {sku_str}\nПлощадь: {area} м²"
             + (f"\nЗапрос: {data.get('conversation_summary', '')[:200]}" if data.get('conversation_summary') else "")
             + f"\nОшибка: {f'{e} {detail}'.strip()[:200]}", env)

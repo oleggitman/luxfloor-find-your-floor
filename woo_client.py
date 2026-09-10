@@ -30,6 +30,36 @@ SHOP_BASE = "https://lux-floor.de"
 UTM_TAG = "utm_source=ki-bodenberater&utm_medium=chat"
 
 
+# Der Shop hat auf der Produktseite einen eigenen Knopf "Gratis muster bestellen"
+# (Klasse `sample-button-add`), der das Produktmuster mit dem richtigen Dekor in
+# den Warenkorb legt. Über ihn liefen 02. bis 09.09.2026 insgesamt 39 Muster,
+# während im Chat 16 von 16 Musterwünschen an der Datenabfrage starben.
+#
+# Der Knopf steht NICHT auf jeder Produktseite. Am 10.09.2026 an 17 Produkten
+# nachgesehen: vorhanden bei Klick-Vinyl, Klebe-Vinyl, Designboden und Laminat,
+# nicht vorhanden bei B-Ware, Parkett, Fliesen, Sockelleisten/Zubehör, Akustik.
+SAMPLE_CATEGORIES = {
+    "klick-vinyl", "klebe-vinyl", "designboden", "laminat",
+    "vinylboden", "designbelag-matt", "laminat-breitdiele",
+    "laminat-fliesenoptik",
+}
+
+
+def sample_available(product) -> bool:
+    """Gibt es auf dieser Produktseite den Muster-Knopf?
+
+    Wir versprechen ein Muster nur dort, wo der Kunde es auch mit einem Tipp
+    bestellen kann. Sonst schicken wir ihn auf eine Seite ohne Knopf.
+    """
+    if not isinstance(product, dict):
+        return False
+    if "b-ware" in (product.get("name") or "").lower():
+        return False
+    slugs = {(c or {}).get("slug", "").lower()
+             for c in (product.get("categories") or [])}
+    return bool(slugs & SAMPLE_CATEGORIES)
+
+
 def _tag_url(url):
     if not url:
         return url
@@ -360,6 +390,11 @@ class WooClient:
             # &quantity=N once the package count is known. Source-tagged so Woo
             # Order Attribution (once enabled) credits the assistant on the order.
             "cart_url": f"{SHOP_BASE}/?add-to-cart={p.get('id')}&{UTM_TAG}" if p.get("id") else None,
+            # Musterbestellung: kein Formular im Chat, sondern der Knopf auf der
+            # Produktseite. `sample_url` ist genau diese Seite; None heißt, dass
+            # es dort keinen Knopf gibt und wir kein Muster versprechen dürfen.
+            "sample_available": sample_available(p),
+            "sample_url": _tag_url(p.get("permalink")) if sample_available(p) else None,
             "weight_kg_per_ve": de_num(p.get("weight")),
             "sqm_per_ve": spv,
         }
