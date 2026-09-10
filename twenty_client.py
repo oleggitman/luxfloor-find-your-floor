@@ -219,7 +219,7 @@ def notify_lead(data: dict, sku_str: str, area, hot: bool, opp_id, env: dict) ->
         lines.append(f"CRM: {opp_id}")
     body = "\n".join(lines)
 
-    status = send_team_mail(subject, body, env)
+    status = send_team_mail(subject, body, env, reply_to=data.get("email") or "")
     if status != "sent":
         # Netz darunter: solange das Postfach nicht steht (oder gerade streikt),
         # geht die Nachricht den alten Weg. Ein Kunde darf nie verloren gehen,
