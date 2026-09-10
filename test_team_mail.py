@@ -107,15 +107,30 @@ class NobodyIsEverLost(unittest.TestCase):
         self.assertFalse(tg.called)
 
     def test_weder_aufgabe_noch_mail_ist_eine_stoerung(self):
+        # nur für einen Kunden, bei dem ein MENSCH weitermachen muss
         with mock.patch.object(twenty_client, "send_team_mail",
                                return_value="failed"), \
              mock.patch.object(twenty_client, "_send_problem_alert") as tg:
             twenty_client.notify_lead(
-                {"name": "Egon", "email": "e@x.de"},
+                {"name": "Egon", "email": "e@x.de", "lead_flag": "sonderanfrage"},
                 sku_str="", area=None, hot=True, opp_id="opp-10", env={},
                 task_id=None)
         self.assertTrue(tg.called)
         self.assertIn("e@x.de", tg.call_args[0][0])
+
+
+    def test_normaler_lead_stoert_oleg_nie(self):
+        """Nach dem Verengen auf den Sonderfall entsteht für einen normalen Lead
+        keine Aufgabe mehr. Das darf nicht dazu führen, dass er wieder in Olegs
+        Telegram landet: ein normaler Lead steht in der CRM und das genügt."""
+        with mock.patch.object(twenty_client, "send_team_mail",
+                               return_value="not_configured"), \
+             mock.patch.object(twenty_client, "_send_problem_alert") as tg:
+            twenty_client.notify_lead(
+                {"name": "Hans", "email": "h@x.de", "lead_flag": "normal"},
+                sku_str="4161", area=30, hot=True, opp_id="opp-12", env={},
+                task_id=None)
+        self.assertFalse(tg.called)
 
     def test_mit_postfach_kein_telegram(self):
         with mock.patch.object(twenty_client, "send_team_mail",

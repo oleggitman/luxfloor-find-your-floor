@@ -186,6 +186,10 @@ DEFAULT_TASK_ASSIGNEE = "c344d84f-ce44-42ad-90aa-6072fc7baaf0"
 def create_team_task(data: dict, opp_id, person_id, sku_str: str, area, env: dict):
     """Legt zu einem Kunden aus dem Chat eine Aufgabe in der CRM an.
 
+    Nur für den einen Fall, für den sie gedacht ist: der Katalog reicht nicht
+    (kein passendes Produkt, Sonderwunsch, Auslandsversand), der Kunde ist warm,
+    ein Mensch muss weitermachen. `lead_flag` sagt das.
+
     Der Weg dorthin am 10.09.2026: Telegram erreicht das Team nicht, E-Mail
     braucht einen Schlüssel, ein Workflow lässt sich per API nicht anlegen, und
     WhatsApp hängt daran, dass der Kunde selbst tippt. Aufgaben kann die API,
@@ -193,16 +197,15 @@ def create_team_task(data: dict, opp_id, person_id, sku_str: str, area, env: dic
 
     Wirft nie: eine fehlende Aufgabe darf keinen Lead kosten.
     """
+    # NUR der eine Fall: der Katalog gibt es nicht her und ein Mensch muss
+    # weitermachen (seine Ansage 10.09.2026 15:22). Ein normaler Lead und ein
+    # Showroom-Termin gehen ihre eigenen Wege; die Aufgabenliste des Teams ist
+    # ihr Arbeitsvorrat und darf nicht zugemuellt werden.
+    if (data.get("lead_flag") or "normal") == "normal":
+        return None
     try:
-        action = data.get("action") or "none"
         name = data.get("name") or "Unbekannt"
-        if action == "showroom_booking":
-            slot = data.get("showroom_slot") or "Zeit offen"
-            title = f"Showroom-Termin bestaetigen: {name}, {slot}"
-        elif (data.get("lead_flag") or "normal") != "normal":
-            title = f"Sonderanfrage aus dem Berater-Chat: {name}"
-        else:
-            title = f"Neuer Kunde aus dem Berater-Chat: {name}"
+        title = f"Kunde aus dem Berater-Chat uebernehmen: {name}"
 
         zeilen = [f"**{title}**", ""]
         if data.get("phone_or_whatsapp"):
@@ -303,10 +306,12 @@ def notify_lead(data: dict, sku_str: str, area, hot: bool, opp_id, env: dict,
     body = "\n".join(lines)
 
     status = send_team_mail(subject, body, env, reply_to=data.get("email") or "")
-    if status != "sent" and not task_id:
-        # Weder Aufgabe noch Mail: JETZT ist ein Kunde in Gefahr. Das ist eine
-        # Störung und geht deshalb an Oleg, nicht als Kundenmeldung, sondern
-        # damit wir es reparieren. Normale Kunden sieht er nicht mehr.
+    braucht_menschen = (data.get("lead_flag") or "normal") != "normal"
+    if status != "sent" and not task_id and braucht_menschen:
+        # Ein Kunde, für den ein MENSCH weitermachen muss, und weder Aufgabe
+        # noch Mail kam durch: jetzt ist er in Gefahr. Das ist eine Störung und
+        # geht deshalb an Oleg, damit wir es reparieren. Ein normaler Lead steht
+        # in der CRM und stört ihn nie (seine Ansage 10.09.2026 13:27).
         _send_problem_alert(
             f"[Ни задача в CRM, ни почта не прошли: {status}] {subject}\n{body}", env)
     return status

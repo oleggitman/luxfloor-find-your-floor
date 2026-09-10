@@ -1,4 +1,4 @@
-"""Jeder Kunde aus dem Chat wird zu einer Aufgabe in der CRM.
+"""Ein Kunde, bei dem der Katalog nicht reicht, wird zu einer Aufgabe in der CRM.
 
 Warum das und nichts anderes (10.09.2026 der Reihe nach durchprobiert):
   Telegram   das Team sitzt dort nicht, nur Oleg.
@@ -25,7 +25,14 @@ ENV = {"TWENTY_API_URL": "https://api.twenty.com", "TWENTY_API_KEY": "k",
        "TWENTY_TASK_ASSIGNEE_ID": "c344d84f-ce44-42ad-90aa-6072fc7baaf0"}
 
 
-class TaskForEveryChatCustomer(unittest.TestCase):
+class NurWennEinMenschUebernehmenMuss(unittest.TestCase):
+    """Seine Ansage 10.09.2026 15:22: es geht um EINEN Fall, nicht um jeden Lead.
+
+    Der Fall: der Katalog gibt es nicht her (kein passendes Produkt, Sonderwunsch,
+    Auslandsversand), der Kunde ist warm, und ein Mensch muss weitermachen. Nur
+    dafür entsteht eine Aufgabe. Ein normaler Lead und ein Showroom-Termin laufen
+    ihre eigenen Wege und dürfen die Aufgabenliste des Teams nicht zumüllen.
+    """
 
     def setUp(self):
         patcher = mock.patch.object(twenty_client, "_post_json")
@@ -35,57 +42,64 @@ class TaskForEveryChatCustomer(unittest.TestCase):
             {"data": {"createTask": {"id": "task-1"}}} if path.endswith("/tasks")
             else {"data": {"createTaskTarget": {"id": "tt-1"}}})
 
-    def _calls(self, path_end):
-        return [c for c in self.post.call_args_list if c[0][0].endswith(path_end)]
+    def _tasks(self):
+        return [c[0][1] for c in self.post.call_args_list if c[0][0].endswith("/tasks")]
 
-    def test_showroom_wird_zur_aufgabe_mit_der_uhrzeit_im_titel(self):
+    def test_sonderanfrage_erzeugt_eine_aufgabe(self):
         twenty_client.create_team_task(
-            {"name": "Bernd Meyer", "action": "showroom_booking",
-             "showroom_slot": "Morgen vormittags", "phone_or_whatsapp": "0170123"},
-            opp_id="opp-1", person_id="p-1", sku_str="4163 Sakura", area=None, env=ENV)
-        body = self._calls("/tasks")[0][0][1]
-        self.assertIn("Showroom", body["title"])
-        self.assertIn("Morgen vormittags", body["title"])
-        self.assertIn("Bernd Meyer", body["title"])
-
-    def test_kontakt_steht_im_text_damit_niemand_suchen_muss(self):
-        twenty_client.create_team_task(
-            {"name": "Clara", "email": "c@x.de", "phone_or_whatsapp": "0170999",
-             "conversation_summary": "80 m2 Wohnzimmer, Steinoptik"},
+            {"name": "Clara", "lead_flag": "sonderanfrage",
+             "phone_or_whatsapp": "0170999", "email": "c@x.de",
+             "info_note": "weisses mattes Vinyl, gibt es nicht im Katalog",
+             "conversation_summary": "80 m2 Wohnzimmer"},
             opp_id="opp-2", person_id="p-2", sku_str="4161", area=80, env=ENV)
-        text = self._calls("/tasks")[0][0][1]["bodyV2"]["markdown"]
-        for muss in ("0170999", "c@x.de", "80 m2 Wohnzimmer", "4161"):
+        self.assertEqual(len(self._tasks()), 1)
+        body = self._tasks()[0]
+        self.assertIn("Clara", body["title"])
+        text = body["bodyV2"]["markdown"]
+        for muss in ("0170999", "c@x.de", "weisses mattes Vinyl", "80 m2 Wohnzimmer"):
             self.assertIn(muss, text)
+
+    def test_auslandsversand_auch(self):
+        twenty_client.create_team_task(
+            {"name": "Dirk", "lead_flag": "auslandsversand"},
+            opp_id="o", person_id=None, sku_str="", area=None, env=ENV)
+        self.assertEqual(len(self._tasks()), 1)
+
+    def test_normaler_lead_erzeugt_KEINE_aufgabe(self):
+        twenty_client.create_team_task(
+            {"name": "Bernd", "lead_flag": "normal", "email": "b@x.de"},
+            opp_id="o", person_id="p", sku_str="4163", area=20, env=ENV)
+        self.assertEqual(self._tasks(), [])
+
+    def test_showroom_erzeugt_KEINE_aufgabe(self):
+        twenty_client.create_team_task(
+            {"name": "Bernd", "action": "showroom_booking",
+             "showroom_slot": "Morgen vormittags"},
+            opp_id="o", person_id="p", sku_str="", area=None, env=ENV)
+        self.assertEqual(self._tasks(), [])
 
     def test_aufgabe_haengt_am_deal_und_am_kontakt(self):
         twenty_client.create_team_task(
-            {"name": "Dora"}, opp_id="opp-3", person_id="p-3",
-            sku_str="", area=None, env=ENV)
-        ziele = [c[0][1] for c in self._calls("/taskTargets")]
+            {"name": "Dora", "lead_flag": "sonderanfrage"}, opp_id="opp-3",
+            person_id="p-3", sku_str="", area=None, env=ENV)
+        ziele = [c[0][1] for c in self.post.call_args_list
+                 if c[0][0].endswith("/taskTargets")]
         self.assertIn({"taskId": "task-1", "targetOpportunityId": "opp-3"}, ziele)
         self.assertIn({"taskId": "task-1", "targetPersonId": "p-3"}, ziele)
 
-    def test_ohne_kontaktkarte_nur_der_deal(self):
-        twenty_client.create_team_task(
-            {"name": "Egon"}, opp_id="opp-4", person_id=None,
-            sku_str="", area=None, env=ENV)
-        ziele = [c[0][1] for c in self._calls("/taskTargets")]
-        self.assertEqual(ziele, [{"taskId": "task-1", "targetOpportunityId": "opp-4"}])
-
     def test_aufgabe_geht_an_das_team_und_ist_offen(self):
         twenty_client.create_team_task(
-            {"name": "Frida"}, opp_id="opp-5", person_id=None,
-            sku_str="", area=None, env=ENV)
-        body = self._calls("/tasks")[0][0][1]
+            {"name": "Frida", "lead_flag": "sonderanfrage"}, opp_id="opp-5",
+            person_id=None, sku_str="", area=None, env=ENV)
+        body = self._tasks()[0]
         self.assertEqual(body["assigneeId"], ENV["TWENTY_TASK_ASSIGNEE_ID"])
         self.assertEqual(body["status"], "TODO")
 
     def test_ein_fehler_hier_darf_den_lead_nicht_kosten(self):
         self.post.side_effect = RuntimeError("CRM weg")
-        self.assertEqual(
-            twenty_client.create_team_task({"name": "Gustav"}, opp_id="o", person_id=None,
-                                           sku_str="", area=None, env=ENV),
-            None)
+        self.assertIsNone(twenty_client.create_team_task(
+            {"name": "Gustav", "lead_flag": "sonderanfrage"}, opp_id="o",
+            person_id=None, sku_str="", area=None, env=ENV))
 
 
 if __name__ == "__main__":
