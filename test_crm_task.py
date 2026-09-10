@@ -101,6 +101,19 @@ class NurWennEinMenschUebernehmenMuss(unittest.TestCase):
         self.assertEqual(body["assigneeId"], ENV["TWENTY_TASK_ASSIGNEE_ID"])
         self.assertEqual(body["status"], "TODO")
 
+    def test_aufgabe_ist_heute_faellig_damit_sie_nicht_untergeht(self):
+        """Das Team hat eine lebendige Aufgabenliste (17 Aufgaben, laufend
+        abgearbeitet). Ein Kunde wartet nicht, also steht die Aufgabe im Heute
+        und nicht irgendwo in der Liste."""
+        twenty_client.create_team_task(
+            {"name": "Hilde", "lead_flag": "sonderanfrage"}, opp_id="o",
+            person_id=None, sku_str="", area=None, env=ENV)
+        body = self._tasks()[0]
+        self.assertIn("dueAt", body)
+        self.assertTrue(body["dueAt"].startswith(
+            __import__("datetime").datetime.now(
+                __import__("datetime").timezone.utc).strftime("%Y-%m-%d")))
+
     def test_ein_fehler_hier_darf_den_lead_nicht_kosten(self):
         self.post.side_effect = RuntimeError("CRM weg")
         self.assertIsNone(twenty_client.create_team_task(

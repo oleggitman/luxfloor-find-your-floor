@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 
 import requests
 
@@ -240,6 +241,10 @@ def create_team_task(data: dict, opp_id, person_id, sku_str: str, area, env: dic
             "title": title,
             "bodyV2": {"markdown": text},
             "status": "TODO",
+            # Heute fällig: das Team hat eine lebendige Aufgabenliste (am
+            # 10.09.2026 nachgesehen: 17 Aufgaben, laufend abgearbeitet), und ein
+            # wartender Kunde gehört ins Heute, nicht irgendwo in die Liste.
+            "dueAt": datetime.now(timezone.utc).isoformat(),
             "assigneeId": env.get("TWENTY_TASK_ASSIGNEE_ID") or DEFAULT_TASK_ASSIGNEE,
         }, env)
         task_id = ((task.get("data") or {}).get("createTask") or {}).get("id")
